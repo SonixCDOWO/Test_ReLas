@@ -40,5 +40,6 @@ _Atualizado em 15/10/2026._
 | Teclado | nome em UTF-16 | `runtime/hle/swkbd.c` |
 | NVN | programas por estágio, programas só com vertex shader, pacing pelo present interval | `runtime/nvn/cmdbuf.c`, `objects.c`, `vulkan/exec.c` |
 | Tradutor de shaders | `LDC.64` cujo registrador de endereço também é destino (modelos com esqueleto) | `runtime/nvn/maxwell/translate.c` |
+| Texturas | `RGB5A1`/`RGBA4` convertidos para RGBA8 (ícones dos Pokémon) | `runtime/nvn/vulkan/textures.c` |
 | Texturas | sem escala para texturas preenchidas pela CPU; invalidação por escrita do host | `runtime/nvn/vulkan/textures.c` |
 | Áudio | fila mínima no `audout` + contagem de underruns | `runtime/services/audio.c` |

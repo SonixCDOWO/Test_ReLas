@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "vk.h"
 #include "../astc.h"
@@ -13,6 +14,8 @@
 #include "../texpatch.h"
 
 // ================================================================== formats
+// expand_rgb: converted to RGBA8 on upload - 1 RGB8, 2 RGBA4 and 3 RGB5A1 (16-bit, red in the low bits: the
+// Vulkan PACK16 formats put it in the high bits, and the alpha bit at the other end)
 typedef struct { VkFormat vf; uint8_t expand_rgb, alpha_one; } VkFmt;
 
 static VkFmt fmt_of(uint32_t f) {
@@ -62,9 +65,9 @@ static VkFmt fmt_of(uint32_t f) {
     case 0x36: return (VkFmt){VK_FORMAT_D32_SFLOAT_S8_UINT};
     case 0x37: return (VkFmt){VK_FORMAT_R8G8B8A8_SRGB, 0, 1};
     case 0x38: return (VkFmt){VK_FORMAT_R8G8B8A8_SRGB};
-    case 0x39: return (VkFmt){VK_FORMAT_R4G4B4A4_UNORM_PACK16};   // Metal ABGR4Unorm
+    case 0x39: return (VkFmt){VK_FORMAT_R8G8B8A8_UNORM, 2};      // RGBA4 (Metal ABGR4Unorm): expanded on upload
     case 0x3A: return (VkFmt){VK_FORMAT_R5G6B5_UNORM_PACK16};     // Metal B5G6R5Unorm
-    case 0x3B: return (VkFmt){VK_FORMAT_R5G5B5A1_UNORM_PACK16};   // Metal A1BGR5Unorm
+    case 0x3B: return (VkFmt){VK_FORMAT_R8G8B8A8_UNORM, 3};      // RGB5A1 (Metal A1BGR5Unorm): expanded on upload
     case 0x3C: return (VkFmt){VK_FORMAT_R5G6B5_UNORM_PACK16};
     case 0x3D: return (VkFmt){VK_FORMAT_A2B10G10R10_UNORM_PACK32};
     case 0x3E: return (VkFmt){VK_FORMAT_A2B10G10R10_UINT_PACK32};
@@ -537,7 +540,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             }
             uint32_t row = l.wb * fi->bpb;
             uint64_t sz = (uint64_t)row * l.hb * l.d;
-            bool expand = mf.expand_rgb && fi->bpb == 3;
+            bool expand = (mf.expand_rgb == 1 && fi->bpb == 3) || (mf.expand_rgb >= 2 && fi->bpb == 2);
             uint32_t out_row = expand ? l.wb * 4 : row;
             VkSpan s = vk_transient((uint64_t)out_row * l.hb * l.d, 16);
             uint8_t *lin = expand ? malloc(sz) : s.ptr;
@@ -548,10 +551,30 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 tegra_deswizzle(src, lin, l.wb, l.hb, l.d, fi->bpb, l.block_height_log2, l.block_depth_log2);
             }
             if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, lin, l.w, l.h, row);
-            if (expand) {  // RGB8 -> RGBA8
+            static int dump_fmt = -2;  // LARECOMP_DUMP_TEX_FMT=<nvn format>: level 0 of those textures, untiled -> build/tex/
+            if (dump_fmt == -2) dump_fmt = getenv("LARECOMP_DUMP_TEX_FMT") ? (int)strtol(getenv("LARECOMP_DUMP_TEX_FMT"), NULL, 0) : -1;
+            if ((int)t->format == dump_fmt && lv == 0 && layer == 0) {
+                char path[160];
+                mkdir("build/tex", 0755);
+                snprintf(path, sizeof path, "build/tex/%llx_%ux%u_f%x_row%u.bin", (unsigned long long)t->addr, l.w, l.h, t->format, row);
+                FILE *f = fopen(path, "wb");
+                if (f) { fwrite(lin, 1, (size_t)row * l.hb, f); fclose(f); }
+            }
+            if (expand) {  // RGB8 / RGBA4 / RGB5A1 -> RGBA8
                 uint8_t *o = s.ptr;
                 uint64_t n = (uint64_t)l.wb * l.hb * l.d;
-                for (uint64_t i = 0; i < n; i++) { o[i * 4] = lin[i * 3]; o[i * 4 + 1] = lin[i * 3 + 1]; o[i * 4 + 2] = lin[i * 3 + 2]; o[i * 4 + 3] = 255; }
+                if (mf.expand_rgb == 1)
+                    for (uint64_t i = 0; i < n; i++) { o[i * 4] = lin[i * 3]; o[i * 4 + 1] = lin[i * 3 + 1]; o[i * 4 + 2] = lin[i * 3 + 2]; o[i * 4 + 3] = 255; }
+                else
+                    for (uint64_t i = 0; i < n; i++) {
+                        uint32_t v = lin[i * 2] | (uint32_t)lin[i * 2 + 1] << 8;
+                        if (mf.expand_rgb == 2) {  // R 0-3, G 4-7, B 8-11, A 12-15
+                            for (int c = 0; c < 4; c++) o[i * 4 + c] = (uint8_t)(((v >> (4 * c)) & 15) * 17);
+                        } else {                   // R 0-4, G 5-9, B 10-14, A 15 (the Pokémon icons in Let's Go)
+                            for (int c = 0; c < 3; c++) { uint32_t x = (v >> (5 * c)) & 31; o[i * 4 + c] = (uint8_t)(x << 3 | x >> 2); }
+                            o[i * 4 + 3] = v >> 15 ? 255 : 0;
+                        }
+                    }
                 free(lin);
             }
             uint32_t w = l.w, hh = l.h, d = l.d;

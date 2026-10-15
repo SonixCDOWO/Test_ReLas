@@ -141,6 +141,14 @@ osso: modelos inteiros, animação mais rígida).
 
 ---
 
+## Parte 7: interface
+
+| # | Sintoma | Diagnóstico | Causa | Correção | Arquivo |
+|---|---|---|---|---|---|
+| 22 | Ícones dos Pokémon "picotados" (equipe, tela de experiência após captura, Pokédex) | log das texturas do draw (`68x56`, formato `0x3B`) e decodificação da textura gravada com 4 layouts de bits: só "R nos bits baixos, alfa no bit 15" dá o ícone certo | o NVN `RGB5A1` (e o `RGBA4`) tem o vermelho nos bits baixos; o Vulkan `R5G5B5A1_UNORM_PACK16` tem o vermelho nos altos e o alfa no bit 0: cores trocadas e alfa tirado de um bit de cor | convertidos para RGBA8 no upload, como o RGB8 | `runtime/nvn/vulkan/textures.c` |
+
+---
+
 ## Lições aprendidas
 - **Medir antes de chutar.** Os maiores avanços vieram de instrumentação: dump de threads, motivo dos draws
   pulados, gravação do áudio, log de quem chama cada função.
