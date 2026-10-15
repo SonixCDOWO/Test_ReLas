@@ -20,15 +20,13 @@ Jogável: abertura, introdução, exploração, capturas, batalhas, menus, salva
 taxa original do jogo) em resoluções de 720p a 4K. Detalhes em [docs/PROGRESSO.md](docs/PROGRESSO.md).
 
 ### Problemas conhecidos
-- Só a versão **Eevee v1.0.0** e só **Windows** (os caminhos de macOS e Linux vieram do LAS Recomp, mas não foram
-  testados aqui).
+- Só a versão **Eevee v1.0.0** e só **Windows** (o caminho de Linux veio do LAS Recomp, mas não foi testado aqui).
 - **60 fps não é possível** por enquanto: a lógica do jogo avança um passo por quadro (dobrar os quadros dobra a
   velocidade). A pesquisa está em [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md).
 - Na **primeira vez** que um objeto aparece no seu PC, ele pode surgir 1 ou 2 quadros atrasado, enquanto o driver
   prepara o shader. Da segunda vez em diante o cache resolve.
 - O giroscópio de controles com sensor (DualSense, Pro Controller) não é usado: a mira é pelo analógico ou pelo mouse.
 - Recursos online (GO Park, trocas, batalhas online, Poké Ball Plus) ficam desligados.
-- Ainda há restos da camada do Zelda no código do runtime (stubs do randomizer e opções antigas sem uso).
 
 ## Recursos
 - **Nativo:** o código do jogo roda compilado, não emulado.

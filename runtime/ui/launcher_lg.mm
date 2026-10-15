@@ -1,6 +1,6 @@
 // Let's Go Recomp start screen: resolution, fullscreen, anti-aliasing, translation (mods/), the keyboard / mouse
-// controls, Play - nothing else. Replaces LASRecomp's start screen (launcher.mm: Link's Awakening's randomizer, seeds, update check, game-file
-// setup) on Windows / Linux; macOS keeps the old one. The choices go to larecomp.ini (settings.c: render_height,
+// controls, Play - nothing else (it replaced LAS Recomp's start screen, made for Link's Awakening's randomizer).
+// The choices go to larecomp.ini (settings.c: render_height,
 // fullscreen, smaa, mod, mouse_sens; bind_key_* from runtime/hle/bindings.c).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
 // LARECOMP_LAUNCHER_AUTOPLAY=1 plays at once; LARECOMP_LAUNCHER_KEYS=1 opens the keyboard section,

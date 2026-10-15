@@ -1,6 +1,6 @@
 # Let's Go Recomp build (from LAS Recomp's).
 # Windows (the supported platform): MSYS2 UCRT64 shell or Git Bash with MSYS2 on PATH, clang + Vulkan renderer
-# (docs/COMPILAR-WINDOWS.md). The macOS (Metal) and Linux branches are LAS Recomp's, kept but untested here.
+# (docs/COMPILAR-WINDOWS.md). The Linux branch is LAS Recomp's, kept but untested here.
 #   make gen           translate your own game files (extracted/exefs) into generated/
 #   make -j20          build/lasrecomp.exe (runtime) and build/lasgame.dll (the game code)
 #   make jogo          copy the build to build/jogo/ (what jogar.bat runs)
@@ -8,10 +8,8 @@ UNAME := $(shell uname -s)
 comma := ,
 ifneq ($(filter MINGW% MSYS% CYGWIN% Windows_NT,$(UNAME) $(OS)),)
 PLATFORM := windows
-else ifeq ($(UNAME),Linux)
-PLATFORM := linux
 else
-PLATFORM := macos
+PLATFORM := linux
 endif
 
 # Linux: ARCH (x86_64 / aarch64, default this machine's) picks the target, separately from PLATFORM. The generated code
@@ -29,14 +27,11 @@ endif
 GENSIMD  := --simd $(if $(filter aarch64,$(ARCH)),asm,c)
 endif
 
-# B: build dir. MACOS_MIN: oldest macOS to run on (default: this one). DEPS: prefix with SDL3 / FFmpeg instead of
-# Homebrew's (make deps). `make app` sets all three (build/mac15, 15.0, build/deps); plain `make` uses none.
+# B: build dir. DEPS: a prefix with SDL3 / FFmpeg to use instead of the system's (MSYS2's).
 B         ?= build
-MACOS_MIN ?=
 DEPS      ?=
-MINFLAG  := $(if $(MACOS_MIN),-mmacosx-version-min=$(MACOS_MIN))
-CC       := clang $(MINFLAG) $(CROSS)
-CXX      := clang++ $(MINFLAG) $(CROSS)
+CC       := clang $(CROSS)
+CXX      := clang++ $(CROSS)
 IMGUI    := third_party/imgui
 GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
 
@@ -53,21 +48,7 @@ UI_OBJ   := $(patsubst runtime/%.mm,$(B)/rt/%.o,$(UI_SRC))
 IMGUI_OBJ := $(B)/imgui/imgui.o $(B)/imgui/imgui_draw.o $(B)/imgui/imgui_tables.o $(B)/imgui/imgui_widgets.o \
              $(B)/imgui/imgui_impl_sdl3.o
 
-ifeq ($(PLATFORM),macos)
-SDL      := $(or $(DEPS),/opt/homebrew/opt/sdl3)
-FFMPEG   := $(or $(DEPS),/opt/homebrew/opt/ffmpeg)
-EXE      := $(B)/lasrecomp
-DEPINC   := -I$(SDL)/include -I$(FFMPEG)/include
-LDFLAGS  := -L$(SDL)/lib -lSDL3 -Wl,-rpath,$(SDL)/lib -L$(FFMPEG)/lib -lavformat -lavcodec -lavutil -lswscale -Wl,-rpath,$(FFMPEG)/lib \
-            -framework CoreFoundation -framework Foundation -framework Metal -framework MetalFX -framework QuartzCore -framework AppKit -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
-BACKEND_SRC := $(wildcard runtime/nvn/*.m)
-BACKEND_OBJ := $(patsubst runtime/%.m,$(B)/rt/%.o,$(BACKEND_SRC))
-IMGUI_OBJ += $(B)/imgui/imgui_impl_metal.o
-UIFLAGS  := -fobjc-arc
-GAMELIB  := $(B)/lasgame.dylib
-GAMELIB_LDFLAGS := -dynamiclib -undefined dynamic_lookup  # (the runtime functions it calls: the app's own)
-GAMELIB_SHARED := -shared -Wl,-undefined,dynamic_lookup  # (the same, for the start screen's build: zig cc)
-else ifeq ($(PLATFORM),linux)
+ifeq ($(PLATFORM),linux)
 EXE      := $(B)/lasrecomp
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 ifeq ($(ARCH),x86_64)
@@ -82,10 +63,9 @@ LDFLAGS  := -fuse-ld=lld -rdynamic $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 -lavformat
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
-UIFLAGS  := -x c++  # the .mm UI sources are plain C++ apart from __APPLE__ blocks
+UIFLAGS  := -x c++  # the .mm UI sources are plain C++
 GAMELIB  := $(B)/lasgame.so
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld  # (the runtime functions it calls: the app's own, -rdynamic)
-GAMELIB_SHARED := -shared
 else
 EXE      := $(B)/lasrecomp.exe
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
@@ -100,12 +80,11 @@ BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/
 BACKEND_OBJ += $(B)/rt/platform/windows_rc.o  # the .exe's icon (Explorer, taskbar)
 WINDRES  ?= windres
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
-UIFLAGS  := -x c++ $(OSFLAGS)  # the .mm UI sources are plain C++ apart from __APPLE__ blocks
+UIFLAGS  := -x c++ $(OSFLAGS)  # the .mm UI sources are plain C++
 GAMELIB  := $(B)/lasgame.dll
 # the runtime functions it calls: exported by the .exe, linked through its import library
 LDFLAGS  += -Wl,--export-all-symbols -Wl,--out-implib,$(B)/lasrecomp.dll.a
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(B)/lasrecomp.dll.a
-GAMELIB_SHARED := -shared  # (+ the import library: runtime/gamebuild.c)
 endif
 
 # GAMELIB_ID: what the game code library is built from (the generator, the headers it is compiled against, the
@@ -130,10 +109,6 @@ $(B)/obj/tools/gamelib_entry.o: tools/gamelib_entry.c $(GAMELIB_SRCS)
 	$(CC) $(GENFLAGS) -DGAMELIB_ID='"$(GAMELIB_ID)"' -c $< -o $@
 $(B)/rt/gamelib.o: $(GAMELIB_SRCS)
 $(B)/rt/gamelib.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
-# the start screen's build of it (runtime/gamebuild.c) uses the same flags
-$(B)/rt/gamebuild.o: $(GAMELIB_SRCS) Makefile
-$(B)/rt/gamebuild.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"' -DGAMELIB_CFLAGS='"$(strip $(filter-out -Iruntime,$(GENFLAGS)))"' \
-                                -DGAMELIB_SHARED='"$(GAMELIB_SHARED)"'
 
 $(B)/rt/%.o: runtime/%.c $(RT_HDRS)
 	@mkdir -p $(dir $@)
@@ -152,13 +127,9 @@ $(B)/rt/%.o: runtime/%.cpp $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(OSFLAGS) -c $< -o $@
 
-$(B)/rt/%.o: runtime/%.m $(RT_HDRS)
-	@mkdir -p $(dir $@)
-	$(CC) $(RTFLAGS) -fobjc-arc -c $< -o $@
-
-# linked to a temp file, then renamed over: a copy of the game still running keeps its (old) file - relinking in
-# place gets running copies killed by macOS (code signature of the changed pages). The temp file keeps the real name
-# (in a folder of its own): on Windows the import library records the name the game code library loads it by.
+# linked to a temp file, then renamed over: a copy of the game still running keeps its (old) file. The temp file keeps
+# the real name (in a folder of its own): on Windows the import library records the name the game code library loads
+# it by.
 $(EXE): $(RT_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ)
 	@mkdir -p $(dir $@)link
 	$(CXX) -o $(dir $@)link/$(notdir $@) $^ $(LDFLAGS)
@@ -182,11 +153,7 @@ $(B)/imgui/imgui_impl_%.o: $(IMGUI)/backends/imgui_impl_%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(B)/imgui/imgui_impl_metal.o: $(IMGUI)/backends/imgui_impl_metal.mm
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -fobjc-arc -c $< -o $@
-
-# Python: tools/venv (macOS, Linux: bin/python, Windows: Scripts/python.exe)
+# Python: .venv (Windows: Scripts/python.exe; Linux: bin/python)
 PY := $(firstword $(wildcard .venv/Scripts/python.exe) $(wildcard .venv/bin/python) $(wildcard tools/venv/bin/python) $(wildcard tools/venv/Scripts/python.exe))
 
 gen:

@@ -9,7 +9,6 @@
 #include "settings.h"
 #include "hle.h"
 #include "kernel.h"
-#include "rando.h"
 
 const char *g_romfs_dir;
 
@@ -80,9 +79,6 @@ void reboot_test_frame(uint64_t frame) {
     next = strchr(next, ',');
     if (next) next++;
     if (!strcmp(what, "title")) { rt_request_reboot(RT_REBOOT_TITLE); return; }
-    // (a test run: the next boot's seed without saving it - larecomp.ini is the player's choice)
-    strlcpy(g_settings.rando_seed, strcmp(what, "vanilla") ? what : "", sizeof g_settings.rando_seed);
-    unsetenv("LARECOMP_RANDO_SEED");
     rt_request_reboot(RT_REBOOT_GAME);
 }
 
@@ -135,7 +131,6 @@ static void boot(const char *root) {
     char why[512];
     if (!gamelib_load(root, why, sizeof why)) FATAL("%s\n", why);
     loader_load(exefs);
-    rando_boot();  // the chosen seed's data patches go into the freshly loaded module
     { extern void settings_load(void); settings_load(); }
     kernel_init();
     dispatch_init();
@@ -182,14 +177,9 @@ int main(int argc, char **argv) {
     }
     rt_paths_init();  // the data root becomes the working directory (runtime/paths.h)
     for (bool title = !skip_launcher;;) {
-        if (title) {  // start screen: resolution, frame rate, PLAY (runtime/ui/launcher_lg.mm; macOS: launcher.mm)
-#ifdef __APPLE__
-            extern void launcher_run(const char *root);
-            launcher_run(root);
-#else
+        if (title) {  // start screen: resolution, fullscreen, anti-aliasing, translation, keys (runtime/ui/launcher_lg.mm)
             extern void launcher_lg_run(const char *root);
             launcher_lg_run(root);
-#endif
         }
         boot(root);
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested

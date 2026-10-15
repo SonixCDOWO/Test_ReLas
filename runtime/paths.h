@@ -1,7 +1,7 @@
-// Where LAS Recomp keeps its files (runtime/paths.c).
+// Where Let's Go Recomp keeps its files (runtime/paths.c).
 //
-// Data root: everything the app writes or the user brings - extracted/ (game files), rando/ (seeds), save/,
-// cache/ (shaders / pipelines), fonts/ (imported), larecomp.ini. rt_paths_init() picks it and makes it the
+// Data root: everything the app writes or the user brings - extracted/ (game files), mods/ (translations), save/,
+// cache/ (shaders / pipelines), fonts/ (optional), larecomp.ini. rt_paths_init() picks it and makes it the
 // working directory, so the rest of the runtime opens those by their relative names. In order:
 //   1. LARECOMP_DATA_ROOT (tests, scratch installs)
 //   2. dev / portable mode: the starting directory already has extracted/ (a source checkout: `./build/lasrecomp

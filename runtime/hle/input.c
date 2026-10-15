@@ -272,11 +272,6 @@ static void push_key(SDL_Scancode sc, SDL_Keymod mod, bool down) {
 static void test_push(uint64_t frame, unsigned long start, unsigned long len, const char *dev, const char *arg) {
     SDL_Event e;
     memset(&e, 0, sizeof e);
-    if (!strcmp(dev, "shot")) {
-        extern char g_window_shot_request[256];  // runtime/hle/hookshot.c
-        if (frame == start) snprintf(g_window_shot_request, sizeof g_window_shot_request, "build/%s.png", arg);
-        return;
-    }
     if (!strcmp(dev, "sdlkey")) {
         if (frame == start || frame == start + len) push_key(SDL_GetScancodeFromName(arg), SDL_KMOD_NONE, frame == start);
         return;
@@ -383,7 +378,7 @@ static void host_test_frame(uint64_t frame) {
 }
 
 static uint64_t g_pad_obj;
-volatile int g_inject_plus;  // frames to hold Plus for the game (movie.c: A/B skip the opening on rando seeds)
+volatile int g_inject_plus;  // frames to hold Plus for the game (movie.c: A / B skip the opening movie too)
 RT_ON_RESET(input_reboot_reset) { g_pad_obj = 0; g_inject_plus = 0; }  // (reboot: the controller object was guest memory)
 void input_frame(uint64_t frame) {
     if (g_pad_obj && getenv("LARECOMP_DUMP_PAD") && frame % 600 == 0) {
@@ -429,13 +424,6 @@ void input_frame(uint64_t frame) {
         }
         for (int i = 0; i < 16; i++) if (!strcmp(name, names[i])) b |= 1ull << i;
     }
-    {  // test hooks steering the stick (runtime/hle/doorjump.c LARECOMP_DOORJUMP_TEST)
-        extern int32_t g_test_lx, g_test_ly;
-        extern uint64_t g_test_stick_until;
-        if (frame < g_test_stick_until) { lx = g_test_lx; ly = g_test_ly; }
-        extern uint64_t g_test_buttons, g_test_buttons_until;  // (LARECOMP_PLACE action script)
-        if (frame < g_test_buttons_until) b |= g_test_buttons;
-    }
     script_buttons = b;
     script_lx = lx;
     script_ly = ly;
@@ -462,18 +450,6 @@ static void fill_state(Cpu *c) {
     static int nlog;
     if (nlog < 6 && (sampling % 600) == 1) { nlog++; LOG("[input] GetNpadState id %#x lr %llx\n", id, c->x[30]); }
     if (id != npad_id_used(NULL)) return;  // only the one controller (npad_id_used) is connected
-    extern void warp_game_tick(Cpu *c);
-    warp_game_tick(c);  // game main thread, once per frame: apply a queued warp
-    { extern void give_item_tick(Cpu *c, uint64_t frame); extern uint64_t renderer_present_count(void);
-      give_item_tick(c, renderer_present_count());
-      extern void chamber_game_tick(Cpu *c, uint64_t frame);
-      chamber_game_tick(c, renderer_present_count());
-      extern void digs_game_tick(Cpu *c, uint64_t frame);
-      digs_game_tick(c, renderer_present_count());
-      extern void qol_tick(void);
-      qol_tick();
-      extern void pets_game_tick(Cpu *c);
-      pets_game_tick(c); }
     extern uint64_t g_watch_lo, g_watch_hi;
     if (!g_pad_obj) g_pad_obj = c->x[1] - 8;
     if (!g_watch_lo && getenv("LARECOMP_WATCH_PAD")) {
@@ -503,16 +479,6 @@ static void fill_state(Cpu *c) {
         int32_t m = dx && dy ? 23170 : 32767;  // diagonals: same speed (32767 / sqrt 2)
         if (dx || dy) lx = dx * m, ly = dy * m;
     }
-    {   // door jumps stop Link for a moment before moving him (runtime/hle/doorjump.c): stick + d-pad released
-        extern int32_t g_stick_lx, g_stick_ly;  // (what the player holds, before that: doorjump.c reads it)
-        g_stick_lx = lx, g_stick_ly = ly;
-        extern uint64_t g_stick_freeze_until;
-        extern uint64_t renderer_present_count(void);
-        if (renderer_present_count() < g_stick_freeze_until) {
-            lx = ly = 0;
-            b &= ~(0xfull << 12);
-        }
-    }
     // stick directions also appear as buttons (bits 16-23)
     if (lx < -16000) b |= 1ull << 16;
     if (ly > 16000) b |= 1ull << 17;
@@ -522,19 +488,12 @@ static void fill_state(Cpu *c) {
     if (ry > 16000) b |= 1ull << 21;
     if (rx > 16000) b |= 1ull << 22;
     if (ry < -16000) b |= 1ull << 23;
-    {   // the pause menu's companion slot (runtime/hle/pets.c) takes the d-pad / sticks / A while the cursor is on it
-        extern uint64_t pets_menu_input(uint64_t b, int32_t st[4]);
-        int32_t st[4] = {lx, ly, rx, ry};
-        b = pets_menu_input(b, st);
-        lx = st[0], ly = st[1], rx = st[2], ry = st[3];
-    }
     *(uint64_t *)(s + 8) = b;
     static uint64_t last_b;
     if (b != last_b && getenv("LARECOMP_INPUT")) LOG("[input] id %#x buttons %#llx (sampling %lld, lr %llx)\n", id, (unsigned long long)b, (long long)sampling, c->x[30]);
     last_b = b;
     *(int32_t *)(s + 16) = lx;
     *(int32_t *)(s + 20) = ly;
-    { extern void input_note_rstick(int32_t ry); input_note_rstick(ry); }
     *(int32_t *)(s + 24) = rx;
     *(int32_t *)(s + 28) = ry;
     *(uint32_t *)(s + 32) = 1;  // IsConnected
