@@ -25,7 +25,11 @@ _Atualizado em 15/10/2026._
 2. **Mira por movimento**: o sensor responde sempre "parado". Opção futura: mirar com o analógico direito ou com
    o giroscópio do controle.
 3. **Recursos online** (Pokémon GO, trocas, Poké Ball Plus): desligados de propósito (serviços offline).
-4. **Desempenho**: não medido em gameplay longo; o vídeo de abertura e as cenas testadas ficam em 30 fps numa RTX 3080.
+4. **Desempenho**: 1080p interno (`LARECOMP_SCALE=1`, ou F1 → resolução 1x) fica estável em 30 fps numa RTX 3080, e a GPU
+   aguenta ~60. Gameplay longo ainda não foi medido.
+5. **60 fps de verdade**: a lógica do jogo anda um passo por quadro. Com `LARECOMP_FPS=60` ele chega ao mesmo estado
+   no mesmo número de quadro em metade do tempo, ou seja, roda em velocidade dobrada (medido em 15/10/2026 com
+   `tools/repro.sh`). 60 fps exigiria mudar o passo de tempo do próprio jogo.
 
 ## Correções no runtime (resumo)
 | Área | Correção | Arquivo |
