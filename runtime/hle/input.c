@@ -512,6 +512,50 @@ HLE_FUNC("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS
 
 // Vibration devices: accepted but inert (the SDK's vibration node graph stays recompiled).
 HLE_FUNC("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", hid_init_vibration) { (void)c; }
+// Six-axis (motion) sensor: a controller held still, level and facing forward. Let's Go aims Poke Ball throws with
+// the gyro in handheld mode; with no sensor behind it the SDK read garbage and the aim went into the sky. A neutral
+// orientation keeps the aim centred on the Pokemon (a throw goes straight). Motion input could come later.
+// SixAxisSensorState (0x60): +0 delta time ns, +8 sampling number, +0x10 acceleration, +0x1c angular velocity,
+// +0x28 angle, +0x34 direction (3x3: x, y, z axes), +0x58 attributes (bit 0 IsConnected).
+static void six_axis_fill(uint8_t *s, int64_t sampling) {
+    memset(s, 0, 0x60);
+    *(int64_t *)(s + 0x00) = 16666667;
+    *(int64_t *)(s + 0x08) = sampling;
+    float *acc = (float *)(s + 0x10);
+    acc[2] = -1.0f;  // gravity, controller lying level
+    float *dir = (float *)(s + 0x34);
+    dir[0] = dir[4] = dir[8] = 1.0f;  // identity orientation
+    *(uint32_t *)(s + 0x58) = 1;      // IsConnected
+}
+static int64_t six_axis_sampling;
+HLE_FUNC("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", hid_six_axis_handles) {
+    uint32_t *out = (uint32_t *)(uintptr_t)c->x[0];
+    int n = (int)c->x[1] < 2 ? (int)c->x[1] : 2;
+    uint32_t id = *(uint32_t *)(uintptr_t)c->x[2];
+    for (int i = 0; i < n; i++) out[i] = (id & 0xFF) << 8 | (uint32_t)i | 0x04000000u;  // (opaque to the game)
+    c->x[0] = (uint64_t)n;
+}
+HLE_FUNC("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_start) { (void)c; }
+HLE_FUNC("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_stop) { (void)c; }
+HLE_FUNC("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", hid_six_axis_state) {
+    six_axis_fill((uint8_t *)(uintptr_t)c->x[0], ++six_axis_sampling);
+}
+HLE_FUNC("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", hid_six_axis_states) {
+    int n = (int)c->x[1];
+    if (n > 0) six_axis_fill((uint8_t *)(uintptr_t)c->x[0], ++six_axis_sampling);  // the latest sample only
+    c->x[0] = n > 0 ? 1 : 0;
+}
+HLE_FUNC("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", hid_six_axis_at_rest) { c->x[0] = 1; }
+HLE_FUNC("_ZN2nn3hid25EnableSixAxisSensorFusionERKNS0_19SixAxisSensorHandleEb", hid_six_axis_fusion) { (void)c; }
+HLE_FUNC("_ZN2nn3hid28IsSixAxisSensorFusionEnabledERKNS0_19SixAxisSensorHandleE", hid_six_axis_fusion_on) { c->x[0] = 1; }
+HLE_FUNC("_ZN2nn3hid32SetSixAxisSensorFusionParametersERKNS0_19SixAxisSensorHandleEff", hid_six_axis_set_params) { (void)c; }
+HLE_FUNC("_ZN2nn3hid32GetSixAxisSensorFusionParametersEPfS1_RKNS0_19SixAxisSensorHandleE", hid_six_axis_get_params) {
+    if (c->x[0]) *(float *)(uintptr_t)c->x[0] = 0.03f;
+    if (c->x[1]) *(float *)(uintptr_t)c->x[1] = 0.4f;
+}
+HLE_FUNC("_ZN2nn3hid25SetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleERKNS0_22GyroscopeZeroDriftModeE", hid_gyro_drift_set) { (void)c; }
+HLE_FUNC("_ZN2nn3hid25GetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleE", hid_gyro_drift_get) { c->x[0] = 1; }
+
 HLE_FUNC("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", hid_vibration_handles) {
     uint32_t *out = (uint32_t *)(uintptr_t)c->x[0];
     int n = (int)c->x[1] < 2 ? (int)c->x[1] : 2;
