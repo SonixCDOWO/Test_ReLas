@@ -3,6 +3,7 @@
 // (runtime/ui/menu.mm menu_keyboard_run) asks for the text - typed directly with a keyboard, an on-screen keyboard
 // with a controller - while this (game) thread keeps re-presenting the last frame.
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../hle.h"
@@ -30,7 +31,29 @@ HLE_FUNC("_ZN2nn5swkbd12ShowKeyboardEPNS0_6StringERKNS0_15ShowKeyboardArgE", swk
     LOG("[swkbd] name entry (max %d, initial \"%s\"): %s \"%s\"\n", max_len, initial, ok ? "entered" : "cancelled", text);
     if (ptr && size) {
         memset((void *)(uintptr_t)ptr, 0, size);
-        snprintf((char *)(uintptr_t)ptr, size, "%s", text);
+        if (getenv("LARECOMP_SWKBD_UTF8")) {  // (Link's Awakening read its answer as UTF-8)
+            snprintf((char *)(uintptr_t)ptr, size, "%s", text);
+        } else {
+            // Let's Go reads UTF-16: "RRS" written as UTF-8 came back as U+5252 'S' ("?S" on screen). The text is
+            // UTF-8 from the overlay: decode it and store UTF-16LE, NUL-terminated.
+            uint16_t *o = (uint16_t *)(uintptr_t)ptr;
+            uint64_t cap = size / 2, k = 0;
+            for (const unsigned char *s = (const unsigned char *)text; *s && k + 1 < cap;) {
+                uint32_t cp = *s++;
+                int more = cp >= 0xF0 ? 3 : cp >= 0xE0 ? 2 : cp >= 0xC0 ? 1 : 0;
+                if (more) cp &= 0x3F >> more;
+                while (more-- && (*s & 0xC0) == 0x80) cp = (cp << 6) | (*s++ & 0x3F);
+                if (cp >= 0x10000) {
+                    if (k + 2 >= cap) break;
+                    cp -= 0x10000;
+                    o[k++] = (uint16_t)(0xD800 | (cp >> 10));
+                    o[k++] = (uint16_t)(0xDC00 | (cp & 0x3FF));
+                } else {
+                    o[k++] = (uint16_t)cp;
+                }
+            }
+            o[k] = 0;
+        }
     }
     c->x[0] = 0;
 }
