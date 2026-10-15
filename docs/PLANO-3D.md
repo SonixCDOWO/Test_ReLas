@@ -1,6 +1,6 @@
 # Plano: corrigir os modelos 3D com esqueleto
 
-_Criado em 15/10/2026. Contexto completo em [HISTORICO.md](HISTORICO.md) (parte 6) e ferramentas em
+_Criado em 15/10/2026. **Resolvido em 15/10/2026** (Fases 3 e 4, no fim). Contexto completo em [HISTORICO.md](HISTORICO.md) (parte 6) e ferramentas em
 [DEPURACAO.md](DEPURACAO.md)._
 
 ## O problema
@@ -137,3 +137,27 @@ O shader e os dados em memória estão certos. **O componente `y` (e provavelmen
 (`a11`, formato RGBA8 UINT) chega errado na GPU**, enquanto o `x` chega certo. A causa está no caminho do atributo de
 vértice até o Vulkan (formato, offset, stride ou buffer). Próximo passo: **RenderDoc** (Fase 3) para ver os valores
 de `a11` por vértice como a GPU os lê e compará-los com a memória.
+
+> **Correção (15/10/2026, mais tarde):** a conclusão acima estava errada. Ver a Fase 3 abaixo.
+
+### Fase 3: RenderDoc ✅ (causa encontrada e corrigida)
+- Captura pelo runtime: `RENDERDOC=1 tools/repro.sh rdc 1310 LARECOMP_RENDERDOC_AT=1290` (vários frames seguidos:
+  o jogo não desenha a cena inteira em todo present). Análise com `tools/rdc_skin.py` e `tools/rdc_draw.py` dentro
+  do `qrenderdoc` (detalhes em [DEPURACAO.md](DEPURACAO.md)).
+- **Os bytes de vértice que a GPU lê são idênticos aos da memória**, inclusive `a11` (ex.: `[7, 6]`) e os pesos. O
+  formato vinculado é `R8G8B8A8_UINT`, como deveria.
+- Os vértices ruins não "colapsam" num ponto: saem com **`w` perto de 0 ou negativo**. No draw 4746 (ossos `7, 6`) o
+  `w` era proporcional ao peso do 1º osso (peso 8 → `w` 9; 128 → 466; 255 → 950): a contribuição do 2º osso era zero.
+- Rodar o shader traduzido **na CPU com os dados exatos da GPU** (vértices, `cb3` e `cb4` exportados da captura)
+  reproduziu a saída da GPU número por número. Logo, o defeito estava no próprio GLSL.
+- Causa: `LDC.64 R4, c[4][R4+0x38]` traduzido como `r4 = cb4[r4+56]; r5 = cb4[r4+60]`. A segunda leitura usava o
+  R4 já sobrescrito, e o `w` da translação do 2º osso (1,0) virava zero ou lixo.
+- Por que os cortes da Fase 1 enganaram: o 1º slot carrega a matriz em `r0`/`r1` com endereço em `r38` (sem
+  conflito), então "só o 1º osso" funcionava. O X5 usou vértices em que a leitura errada caía, por acaso, num valor
+  inofensivo. O X14 ficou sem explicação completa.
+
+### Fase 4: correção ✅
+`runtime/nvn/maxwell/translate.c`: quando o registrador de endereço de um `LDC` multi-palavra também é destino, ele é
+copiado para uma temporária antes das escritas. Validado com `tools/repro.sh` sem nenhum experimento ligado:
+personagem, Eevee e NPCs inteiros, com o blend de ossos real. O paliativo do `jogar.bat`
+(`LARECOMP_VK_SKIN_ONEBONE=1`) foi retirado.

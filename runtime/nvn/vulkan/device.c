@@ -527,6 +527,10 @@ void backend_present(NvnTexture *t) {
     frames++;
     total_frames++;
     g_frame_counter++;
+    {   // LARECOMP_RENDERDOC_AT=<frame>: under RenderDoc (renderdoccmd capture), capture the frame after that one
+        extern void renderdoc_frame(uint64_t frame);
+        renderdoc_frame(total_frames);
+    }
     extern void input_frame(uint64_t frame);
     input_frame(total_frames);
     static long slow_ms = -1;

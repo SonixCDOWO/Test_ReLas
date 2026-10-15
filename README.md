@@ -8,14 +8,14 @@ Baseado no runtime do [LASRecomp](https://github.com/peiikai/LASRecomp) (Link's 
 específica do Zelda. Veja [LICENSE-LASRecomp](LICENSE-LASRecomp).
 
 ## Estado
-Jogável do começo: abertura, introdução, captura do Pikachu, salvar e carregar, a 30 fps. **Os modelos com esqueleto
-(personagens e Pokémon) ainda aparecem distorcidos.** Detalhes em [docs/PROGRESSO.md](docs/PROGRESSO.md).
+Jogável do começo: abertura, introdução, captura do Pikachu, salvar e carregar, a 30 fps, com personagens e
+Pokémon animados corretamente. Detalhes em [docs/PROGRESSO.md](docs/PROGRESSO.md).
 
 ## Documentação
 - [docs/PROGRESSO.md](docs/PROGRESSO.md): o que funciona e o que falta
 - [docs/HISTORICO.md](docs/HISTORICO.md): cada problema encontrado, a causa e a correção
 - [docs/DEPURACAO.md](docs/DEPURACAO.md): ferramentas e variáveis de diagnóstico
-- [docs/PLANO-3D.md](docs/PLANO-3D.md): plano para corrigir os modelos 3D com esqueleto
+- [docs/PLANO-3D.md](docs/PLANO-3D.md): como os modelos 3D com esqueleto foram corrigidos (plano e experimentos)
 - [docs/DIAGNOSTICO.md](docs/DIAGNOSTICO.md): módulos do jogo e cobertura do tradutor
 - [docs/ANALISE-LASRecomp.md](docs/ANALISE-LASRecomp.md): análise da base
 
@@ -42,7 +42,8 @@ make build/lasrecomp.exe    # compila o runtime
 ```
 
 ## Jogar
-Dê dois cliques em `jogar.bat` (o log vai para `logs\jogo.log`), ou no Git Bash:
+Dê dois cliques em `jogar.bat` (o log vai para `logs\jogo.log`). Ele roda a cópia estável em `build/jogo/`, que
+`tools/publicar_jogo.sh` atualiza a partir do build atual. Ou, no Git Bash:
 ```
 PATH="/c/msys64/ucrt64/bin:$PATH" ./build/lasrecomp.exe extracted --play
 ```

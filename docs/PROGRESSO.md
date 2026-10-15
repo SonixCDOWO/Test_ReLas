@@ -15,13 +15,13 @@ _Atualizado em 15/10/2026._
 | Ritmo | travado em 30 fps (nativo do jogo) |
 | Introdução | idioma, Professor Carvalho, escolha de personagem, nome digitado corretamente |
 | 3D | cenário correto (quarto, Pallet Town, céu), passes de profundidade/sombra |
+| Personagens e Pokémon | modelos com esqueleto corretos, com animação (correção do `LDC.64` no tradutor de shaders) |
 | Gameplay | andar, encontro com o Professor, captura do Pikachu (mira centralizada) |
 | Save | salvar e carregar funcionam (`save/save_0/savedata.bin`) |
 
 ## O que falta
-1. **Personagens e Pokémon "explodidos"** (modelos com esqueleto esticados em espinhos). Dados de entrada
-   verificados e corretos; investigação em andamento com o harness de shader na CPU. Detalhes em
-   [HISTORICO.md, parte 6](HISTORICO.md#parte-6-o-problema-em-aberto-personagens-explodidos). Plano: [PLANO-3D.md](PLANO-3D.md).
+1. **Validar o 3D em mais cenas** (batalhas, Pokémon grandes, cidades): a correção dos modelos com esqueleto foi
+   validada na Pallet Town. Histórico em [HISTORICO.md, parte 6](HISTORICO.md#parte-6-personagens-explodidos-resolvido).
 2. **Mira por movimento**: o sensor responde sempre "parado". Opção futura: mirar com o analógico direito ou com
    o giroscópio do controle.
 3. **Recursos online** (Pokémon GO, trocas, Poké Ball Plus): desligados de propósito (serviços offline).
@@ -39,5 +39,6 @@ _Atualizado em 15/10/2026._
 | Controle | modo portátil, estilos suportados pelo jogo, sensor de movimento neutro | `runtime/hle/input.c`, `services/hid_set.c` |
 | Teclado | nome em UTF-16 | `runtime/hle/swkbd.c` |
 | NVN | programas por estágio, programas só com vertex shader, pacing pelo present interval | `runtime/nvn/cmdbuf.c`, `objects.c`, `vulkan/exec.c` |
+| Tradutor de shaders | `LDC.64` cujo registrador de endereço também é destino (modelos com esqueleto) | `runtime/nvn/maxwell/translate.c` |
 | Texturas | sem escala para texturas preenchidas pela CPU; invalidação por escrita do host | `runtime/nvn/vulkan/textures.c` |
 | Áudio | fila mínima no `audout` + contagem de underruns | `runtime/services/audio.c` |

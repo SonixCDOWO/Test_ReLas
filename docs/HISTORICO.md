@@ -114,27 +114,30 @@ Resultado: **cenário 3D correto** (quarto, Pallet Town, céu), captura do Pikac
 
 ---
 
-## Parte 6: o problema em aberto, personagens "explodidos"
+## Parte 6: personagens "explodidos" (resolvido)
 
-Os modelos com esqueleto (personagens, Pokémon) aparecem esticados em "espinhos" que convergem para um ponto.
-O cenário estático está correto, então câmera e geometria comum funcionam.
+Os modelos com esqueleto (personagens, Pokémon) apareciam esticados em "espinhos" que convergiam para um ponto.
+O cenário estático estava correto, então câmera e geometria comum funcionavam. Plano e experimentos completos em
+[PLANO-3D.md](PLANO-3D.md).
 
-### O que já foi verificado
-| Hipótese | Teste | Resultado |
-|---|---|---|
-| Formato de atributo desconhecido | log de formatos fora da tabela | nenhum |
-| Índices/pesos dos ossos errados | dump dos primeiros vértices | corretos (ex.: ossos `25, 24`, pesos `238 + 17 = 255`) |
-| Matrizes dos ossos inválidas | estatística da paleta (`cb4`) | rotações + translações válidas, animando |
-| Cópia da CPU antes do compute da GPU | ler uniforms direto da memória (`LARECOMP_VK_UBO_DIRECT=1`) | sem mudança |
-| Cópia dos vértices | `LARECOMP_VK_COPY_VERTICES=1` | sem mudança |
-| Tamanho do buffer dinâmico | código do `cbuf_info` | o buffer inteiro já é vinculado |
+| # | Sintoma | Diagnóstico | Causa | Correção | Arquivo |
+|---|---|---|---|---|---|
+| 21 | Personagens e Pokémon em espinhos | captura no RenderDoc + o shader rodado na CPU com os mesmos dados da GPU: saídas idênticas, e o `w` de saída proporcional ao peso do **1º** osso | `LDC.64 R4, c[4][R4+0x38]` (carrega R4 e R5 com R4 como endereço) virava `r4 = cb4[r4+56]; r5 = cb4[r4+60]`: a segunda leitura usava o R4 **já sobrescrito**. O `w` da translação do 2º osso (que deveria ser 1,0) vinha zero ou lixo, e o vértice ia para perto do plano da câmera | o tradutor copia o registrador de endereço para uma temporária quando ele também é destino | `runtime/nvn/maxwell/translate.c` |
 
-### Pista atual
-Um harness roda o shader de skinning traduzido **na CPU** com os dados reais (`tools/skintest`). No primeiro dump
-(capturado cedo demais, na introdução), as linhas 8 a 11 de `cb3`, que o shader usa como **matriz de câmera**,
-estavam zeradas. O próximo passo é capturar um desenho de personagem já no gameplay (com o save, isso é direto) e:
-1. conferir se a matriz de câmera dele está preenchida (e quem a preenche: CPU, `UpdateUniformBuffer` ou compute);
-2. comparar o `gl_Position` do harness com o skinning de referência, para separar erro de tradução de erro de dados.
+### O caminho até a causa
+1. **Descartados com dados** (antes do plano): formato de atributo, índices e pesos em memória, matrizes da paleta,
+   momento da cópia dos uniforms, cópia dos vértices.
+2. **Fases 0 e 1** do plano: reprodução determinística com o save (`tools/repro.sh`) e cortes binários na GPU. Peso
+   100% no 1º osso deixava os modelos inteiros; o 2º osso estava errado. A conclusão da época, "o valor de `a11.y`
+   chega errado na GPU", estava **errada**: o teste do shader na CPU (X5) tinha passado por coincidência, porque o
+   vértice usado não exercitava a leitura defeituosa.
+3. **Fase 3, RenderDoc**: os bytes de vértice que a GPU lê (incluindo `a11 = [7, 6]` e os pesos) eram idênticos aos
+   da memória. Rodar o shader traduzido na CPU com os dados **exatos** da GPU (vértices e `cb3`/`cb4` exportados da
+   captura) reproduziu a saída da GPU número por número. Então o defeito estava no próprio shader traduzido. O log
+   das leituras de `cb4` no harness e a leitura do GLSL apontaram as duas linhas acima.
+
+Enquanto a correção não existia, o `jogar.bat` usou um paliativo (`LARECOMP_VK_SKIN_ONEBONE=1`, peso 100% no 1º
+osso: modelos inteiros, animação mais rígida).
 
 ---
 
@@ -147,3 +150,8 @@ estavam zeradas. O próximo passo é capturar um desenho de personagem já no ga
   `TimedWait`, `AndroidErrorToNnError`) deu a resposta exata em vez de tentativa e erro.
 - **Corridas de thread aparecem como sintomas aleatórios.** O vídeo travava num quadro diferente a cada execução;
   a causa era uma corrida no kernel, não o vídeo.
+- **Um teste que passa precisa exercitar o caso que falha.** O shader na CPU "provou" que a tradução estava certa
+  com vértices que não passavam pela instrução defeituosa. Rodar com os dados exatos de um draw quebrado (exportados
+  do RenderDoc) e comparar com a saída da GPU resolveu em minutos.
+- **Tradução de registradores: cuidado com destino que também é fonte.** Instruções que escrevem vários
+  registradores (`LDC.64`, `.128`) podem ter o endereço entre os destinos; leia as fontes antes de escrever.

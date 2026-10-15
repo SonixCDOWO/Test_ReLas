@@ -975,6 +975,15 @@ static void compile_program(void *arg) {
     size_t nv = 0, nf = 0;
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
+    if (sv && getenv("LARECOMP_RENDERDOC_AT")) {  // which guest shader each SPIR-V is: tools/rdc_skin.py (FNV-1a 64)
+        static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+        uint64_t h = 0xcbf29ce484222325ull;
+        for (size_t i = 0; i < nv * 4; i++) { h ^= ((const uint8_t *)sv)[i]; h *= 0x100000001B3ull; }
+        pthread_mutex_lock(&lock);
+        FILE *f = fopen("build/rdc-shaders.txt", "a");
+        if (f) { fprintf(f, "%016llx vs %llx\n", (unsigned long long)h, (unsigned long long)p->code[0]); fclose(f); }
+        pthread_mutex_unlock(&lock);
+    }
     if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
@@ -1030,7 +1039,9 @@ static void translate_program(void *arg) {
             g_exp_count[3]++;
         }
     }
-    if (p->vi->msl && getenv("LARECOMP_VK_SKIN_ONEBONE") && strstr(p->vi->msl, "in vec4 a12;")) {
+    // (only skinned shaders - the ones with bone indices too: a12 is something else elsewhere.)
+    if (p->vi->msl && getenv("LARECOMP_VK_SKIN_ONEBONE") && strstr(p->vi->msl, "in vec4 a12;") &&
+        strstr(p->vi->msl, "in uvec4 a11;")) {
         const char *m = strstr(p->vi->msl, "void main() {");
         if (m) {
             static const char def[] = "#define a12 vec4(1.0, 0.0, 0.0, 0.0)\n";

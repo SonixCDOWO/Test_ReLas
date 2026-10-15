@@ -100,6 +100,8 @@ int main(int argc, char **argv) {
   fclose(fi);
 ''' + cbload + r'''
   snprintf(path, sizeof path, "%s/verts.bin", dir); size_t nb = load(path, vb, sizeof vb);
+  static float gpu[1 << 18][4];  // (tools/rdc_draw.py: the GPU's gl_Position per vertex, from a RenderDoc capture)
+  snprintf(path, sizeof path, "%s/gpu_pos.bin", dir); size_t ng = load(path, gpu, sizeof gpu) / 16;
   int nv = stride ? (int)(nb / stride) : 0;
   printf("stride %u, %d vertices\n", stride, nv);
   double worst = 0;
@@ -113,10 +115,15 @@ int main(int argc, char **argv) {
     g_one_bone = true;  shader_main(); vec4 one = gl_Position;
     double d = 0; for (int c = 0; c < 4; c++) d = std::max(d, (double)std::fabs(real[c] - one[c]));
     worst = std::max(worst, d);
-    if (i < 24 || d > 1.0)
-      printf("v%-3d bones %u %u %u %u w %.2f %.2f %.2f %.2f | real %9.3f %9.3f %9.3f %9.3f | one-bone %9.3f %9.3f %9.3f %9.3f | diff %.3f\n",
+    double dg = 0;
+    if ((size_t)i < ng) for (int c = 0; c < 4; c++) dg = std::max(dg, (double)std::fabs(real[c] - gpu[i][c]));
+    if (i < 24 || d > 1.0 || dg > 1.0) {
+      printf("v%-3d bones %u %u %u %u w %.2f %.2f %.2f %.2f | real %9.3f %9.3f %9.3f %9.3f | one-bone %9.3f %9.3f %9.3f %9.3f | diff %.3f",
              i, a11[0], a11[1], a11[2], a11[3], a12_real[0], a12_real[1], a12_real[2], a12_real[3],
              real.x, real.y, real.z, real.w, one.x, one.y, one.z, one.w, d);
+      if ((size_t)i < ng) printf(" | gpu %9.3f %9.3f %9.3f %9.3f", gpu[i][0], gpu[i][1], gpu[i][2], gpu[i][3]);
+      printf("\n");
+    }
   }
   printf("largest |real - one-bone| over all vertices: %.3f\n", worst);
 }

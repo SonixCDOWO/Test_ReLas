@@ -35,6 +35,9 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_VK_UBO_DIRECT=1` | uniforms lidos direto da memória do jogo na GPU (experimento) |
 | `LARECOMP_VK_COPY_VERTICES=1` | copia vértices em vez de ler direto (experimento) |
 | `LARECOMP_NO_SCALE=1` | desliga a escala de resolução interna |
+| `LARECOMP_VK_SKIN_ONEBONE=1` | shaders com esqueleto usam só o 1º osso (experimento X4; foi o paliativo antes da correção) |
+| `LARECOMP_VK_SKIN_IDENTITY=1` / `LARECOMP_VK_SKIN_IDX_X=1` / `LARECOMP_VK_SKIN_W=<expr>` | outros experimentos do [PLANO-3D.md](PLANO-3D.md) |
+| `LARECOMP_DUMP_SKIN=1` + `LARECOMP_DUMP_SKIN_FRAME=<frame>` | grava o 1º draw com esqueleto a partir daquele frame em `build/skin/` |
 
 ### Harness de shader na CPU (`tools/skintest`)
 Roda um vertex shader traduzido na CPU com os dados reais de um draw:
@@ -43,7 +46,32 @@ LARECOMP_SAVE_MSL=1 LARECOMP_DUMP_SKIN=400 ./build/lasrecomp.exe extracted --pla
 ./.venv/Scripts/python tools/skintest/make_harness.py build/glsl/<vs>_vs.glsl build/skintest.cpp
 clang++ -O1 -std=c++17 -w -o build/skintest.exe build/skintest.cpp && ./build/skintest.exe build/skin
 ```
-O `.cpp` gerado contém o shader do jogo: fica em `build/` e nunca vai para o git.
+O `.cpp` gerado contém o shader do jogo: fica em `build/` e nunca vai para o git. Se a pasta tiver um `gpu_pos.bin` (exportado por
+`tools/rdc_draw.py`), cada vértice também mostra a posição que a GPU calculou.
+
+### RenderDoc (o que a GPU realmente recebeu)
+RenderDoc 1.46 em `C:\Program Files\RenderDoc`. O runtime dispara a captura sozinho quando roda dentro dele:
+```
+RENDERDOC=1 tools/repro.sh rdc 1310 LARECOMP_RENDERDOC_AT=1290 [LARECOMP_RENDERDOC_FRAMES=2]
+```
+Isso grava `build/rdc/capture_frameN.rdc` (4 frames seguidos por padrão, porque o jogo não desenha a cena inteira
+em todo present) e `build/rdc-shaders.txt`, com o hash de cada SPIR-V e o endereço do shader no jogo. Para analisar,
+use o Python do `qrenderdoc`. Ele trava na inicialização se achar o depurador Python do VS Code no perfil do
+usuário, então aponte `USERPROFILE`/`HOME` para uma pasta vazia **fora** de `build/rdc` (o `repro.sh` apaga essa pasta):
+```
+H="$(cygpath -w "$PWD/build/rdc-home")"
+RDC_DIR=D:/projects/letsgo-recomp/build/rdc OUT=D:/projects/letsgo-recomp/build/rdc/skin.txt   USERPROFILE="$H" HOME="$H" "/c/Program Files/RenderDoc/qrenderdoc.exe" --python D:/projects/letsgo-recomp/tools/rdc_skin.py
+RDC=<captura.rdc> EID=<evento> OUT=<arquivo.txt> USERPROFILE="$H" HOME="$H"   "/c/Program Files/RenderDoc/qrenderdoc.exe" --python D:/projects/letsgo-recomp/tools/rdc_draw.py
+```
+- `rdc_skin.py`: para cada draw com esqueleto, mostra o shader, a faixa de NDC e de `w` e quantos vértices saem da tela.
+- `rdc_draw.py`: um draw vértice a vértice (`a11`, `a12`, `gl_Position`), separando os vértices com `w` fora da
+  mediana. Exporta `build/rdc/draw_<eid>/` no formato do harness (`verts.bin`, `cbN.bin`, `gpu_pos.bin`).
+
+Não ligue debug info nos shaders para capturar: com milhares de shaders, o replay leva mais de 20 minutos só para abrir.
+
+### Jogar enquanto se testa
+`jogar.bat` roda a cópia estável em `build/jogo/`. `tools/publicar_jogo.sh` (com o jogo fechado) copia o build atual
+para lá depois de validado. Assim, recompilar e testar em `build/` não esbarra no executável travado pelo jogo aberto.
 
 ## Vídeo e áudio
 | Variável | Efeito |

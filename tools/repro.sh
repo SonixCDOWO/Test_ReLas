@@ -8,6 +8,7 @@
 #
 # Exemplo:  tools/repro.sh base 1300,1400
 #           tools/repro.sh paleta 1300,1400 LARECOMP_VK_SKIN_IDENTITY=1
+#           RENDERDOC=1 tools/repro.sh rdc 1300 LARECOMP_RENDERDOC_AT=1290   (captura em build/rdc/)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
@@ -16,8 +17,10 @@ name=${1:?nome do teste}
 shots=${2:-1400}
 shift $(( $# >= 2 ? 2 : 1 ))
 
-rm -rf build/test-save build/frames "build/repro/$name"
-mkdir -p build/test-save "build/repro/$name" logs
+rm -rf build/test-save "build/repro/$name"
+rm -f build/frames/*.png  # (files only: a removed folder still open somewhere stays "delete pending" and vanishes later)
+[ -n "${RENDERDOC:-}" ] && rm -rf build/rdc && mkdir -p build/rdc
+mkdir -p build/test-save "build/repro/$name" logs build/frames
 cp -r save/* build/test-save/
 
 last=${shots##*,}
@@ -25,6 +28,9 @@ last=${shots##*,}
     export LARECOMP_INPUT="400:A:6,500:A:6,1000:A:6,1100:A:6" LARECOMP_NO_USER_INPUT=1 \
         LARECOMP_SAVE_DIR=build/test-save LARECOMP_NO_AUDIO=1 LARECOMP_SHOT_AT="$shots"
     for kv in "$@"; do export "$kv"; done
+    if [ -n "${RENDERDOC:-}" ]; then  # under RenderDoc: LARECOMP_RENDERDOC_AT=<frame> picks the frame (build/rdc/)
+        exec "/c/Program Files/RenderDoc/renderdoccmd.exe" capture -w -d "$(cygpath -w "$PWD")" ./build/lasrecomp.exe extracted --play             > "logs/repro-$name.log" 2>&1
+    fi
     exec ./build/lasrecomp.exe extracted --play > "logs/repro-$name.log" 2>&1
 ) &
 pid=$!
@@ -35,6 +41,14 @@ for _ in $(seq 1 240); do
     sleep 1
 done
 sleep 1  # (the screenshot file is written; let the log catch up)
+if [ -n "${RENDERDOC:-}" ]; then  # the capture is written in the background: wait until its size settles
+    for _ in $(seq 1 120); do
+        if ls build/rdc/*.rdc >/dev/null 2>&1; then
+            s1=$(cat build/rdc/*.rdc | wc -c); sleep 5; [ "$s1" = "$(cat build/rdc/*.rdc | wc -c)" ] && break
+        else sleep 1; fi
+    done
+    ls -la build/rdc/
+fi
 winpid=$(cat "/proc/$pid/winpid" 2>/dev/null || true)
 if [ -n "$winpid" ]; then taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true; else kill "$pid" 2>/dev/null || true; fi
 wait "$pid" 2>/dev/null || true
