@@ -146,6 +146,7 @@ osso: modelos inteiros, animação mais rígida).
 | # | Sintoma | Diagnóstico | Causa | Correção | Arquivo |
 |---|---|---|---|---|---|
 | 22 | Ícones dos Pokémon "picotados" (equipe, tela de experiência após captura, Pokédex) | log das texturas do draw (`68x56`, formato `0x3B`) e decodificação da textura gravada com 4 layouts de bits: só "R nos bits baixos, alfa no bit 15" dá o ícone certo | o NVN `RGB5A1` (e o `RGBA4`) tem o vermelho nos bits baixos; o Vulkan `R5G5B5A1_UNORM_PACK16` tem o vermelho nos altos e o alfa no bit 0: cores trocadas e alfa tirado de um bit de cor | convertidos para RGBA8 no upload, como o RGB8 | `runtime/nvn/vulkan/textures.c` |
+| 23 | Flash azul e depois preto ao abrir o jogo | prints dos primeiros frames e log das limpezas (`LARECOMP_LOG_CLEARS`, agora com a cor): os 2 primeiros presents são um quad 2D azul de tela cheia desenhado pelo próprio jogo, sem nenhum clear; o `nn::oe::FinishStartupLogo` é chamado já no frame 0, então o logo do sistema não os esconderia | não esclarecida (não se sabe se o console mostra o mesmo) | a janela fica preta nos 2 primeiros presents (`LARECOMP_HIDE_FIRST_FRAMES`, 0 desliga) | `runtime/nvn/vulkan/device.c` |
 
 ---
 
