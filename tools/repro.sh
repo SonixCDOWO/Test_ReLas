@@ -8,6 +8,7 @@
 #
 # Exemplo:  tools/repro.sh base 1300,1400
 #           tools/repro.sh paleta 1300,1400 LARECOMP_VK_SKIN_IDENTITY=1
+#           EXE=./build/jogo/lasrecomp.exe tools/repro.sh jogo 1400   (a cópia do jogar.bat)
 #           RENDERDOC=1 tools/repro.sh rdc 1300 LARECOMP_RENDERDOC_AT=1290   (captura em build/rdc/)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,7 +32,7 @@ last=${shots##*,}
     if [ -n "${RENDERDOC:-}" ]; then  # under RenderDoc: LARECOMP_RENDERDOC_AT=<frame> picks the frame (build/rdc/)
         exec "/c/Program Files/RenderDoc/renderdoccmd.exe" capture -w -d "$(cygpath -w "$PWD")" ./build/lasrecomp.exe extracted --play             > "logs/repro-$name.log" 2>&1
     fi
-    exec ./build/lasrecomp.exe extracted --play > "logs/repro-$name.log" 2>&1
+    exec "${EXE:-./build/lasrecomp.exe}" extracted --play > "logs/repro-$name.log" 2>&1
 ) &
 pid=$!
 last_png=$(printf "build/frames/frame_%05d.png" "$last")
