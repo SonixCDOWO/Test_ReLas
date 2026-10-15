@@ -38,8 +38,13 @@ _Atualizado em 15/10/2026._
      trocá-lo por 16.666.667 não muda nada.
    - O float 1/30 aparece uma vez (`0x7000f47428`), usado só numa função de interpolação (`0x7000611440`), não no laço.
    - O laço do aplicativo (`0x70000231a0`) chama a atualização (`0x700001d1c0`) e depois o fim de quadro por vtable.
-     Próximo passo: achar, dentro da atualização, se há um passo de tempo global (multiplicador de velocidade) ou se
-     cada sistema conta quadros (aí 60 fps exigiria interpolação no runtime, não um patch).
+   - **Não há passo de tempo global.** Varredura da memória no gameplay (dados do `main` e heap, frame 1300) a 30 e a
+     60 fps, endereço a endereço: dos 9.238 floats perto de 1/30 a 30 fps, nenhum vira 1/60 a 60 fps (8.508 ficam
+     idênticos: são dados); os valores perto de 1/60 que só aparecem a 60 fps têm o mesmo conteúdo a 30. O único
+     inteiro perto de 33,3 ms também é fixo e não altera nada. Ou seja, cada sistema avança por quadro.
+   - Conclusão: 60 fps na velocidade certa não sai de um patch. Os caminhos seriam gerar quadros intermediários
+     (interpolação no runtime, sem vetores de movimento do jogo: artefatos, principalmente na interface) ou um
+     programa externo de geração de quadros.
 
 ## Correções no runtime (resumo)
 | Área | Correção | Arquivo |

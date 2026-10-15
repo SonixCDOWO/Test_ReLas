@@ -37,6 +37,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_NO_SCALE=1` | desliga a escala de resolução interna |
 | `LARECOMP_LOG_INTERVAL=1` | cada `SetPresentInterval` do jogo, com a cadeia de chamadores do guest (frame pointers) |
 | `LARECOMP_WATCH64=<addr>` | imprime o int64 nesse endereço do guest a cada 30 presents |
+| `LARECOMP_SCAN_F32=<valor>:<tolerância>:<present>` | lista os float32 perto do valor nos dados do `main` e no heap naquele present (até 20.000) |
+| `LARECOMP_DUMP_F32=<arquivo>:<present>` | imprime os float32 dos endereços (hex, um por linha) do arquivo naquele present |
 | `LARECOMP_POKE64=<addr>=<valor>` | grava esse int64 no guest antes de cada present (experimentos) |
 | `LARECOMP_HIDE_FIRST_FRAMES=<n>` | janela preta nos n primeiros presents (padrão 2: o flash azul da abertura; 0 mostra tudo) |
 | `LARECOMP_WINDOW_SHOT=<frame>` | grava a imagem **da janela** em `build/window.png` (o `LARECOMP_SHOT_AT` grava a imagem do jogo, antes da janela) |

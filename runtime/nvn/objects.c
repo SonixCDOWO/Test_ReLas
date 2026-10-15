@@ -692,8 +692,43 @@ NVN(nvnQueuePresentTexture) {
     int i = (int)A(2);
     static uint64_t watch = ~0ull, presents;  // LARECOMP_WATCH64=<guest addr>: its int64 every 30 presents (debug)
     if (watch == ~0ull) watch = getenv("LARECOMP_WATCH64") ? strtoull(getenv("LARECOMP_WATCH64"), NULL, 0) : 0;
-    if (watch && presents++ % 30 == 0)
+    presents++;
+    if (watch && presents % 30 == 1)
         LOG("[watch] present %llu: %llx = %lld\n", (unsigned long long)presents, (unsigned long long)watch, (long long)*(const int64_t *)(uintptr_t)watch);
+    static const char *scan = (const char *)1;  // LARECOMP_SCAN_F32=<value>:<tolerance>:<present>: float32s near value
+    if (scan == (const char *)1) scan = getenv("LARECOMP_SCAN_F32");  // in main's data/bss and the heap, at that present
+    if (scan) {
+        float v = 0, tol = 0;
+        unsigned long at = 0;
+        if (sscanf(scan, "%f:%f:%lu", &v, &tol, &at) == 3 && presents == at) {
+            extern uint64_t kernel_heap_size(void);
+            const uint64_t ranges[2][2] = {{0x7001527000ull, 0x7001ee1000ull}, {0x7240000000ull, 0x7240000000ull + kernel_heap_size()}};
+            int found = 0;
+            for (int r = 0; r < 2; r++)
+                for (uint64_t a = ranges[r][0]; a + 4 <= ranges[r][1] && found < 20000; a += 4) {
+                    float f = *(const float *)(uintptr_t)a;
+                    if (f >= v - tol && f <= v + tol) { LOG("[scan] %llx = %.9g\n", (unsigned long long)a, f); found++; }
+                }
+            LOG("[scan] %d hits\n", found);
+        }
+    }
+    static const char *dump = (const char *)1;  // LARECOMP_DUMP_F32=<file of hex addresses>:<present>: their float32s
+    if (dump == (const char *)1) dump = getenv("LARECOMP_DUMP_F32");
+    if (dump) {
+        const char *colon = strrchr(dump, ':');
+        if (colon && colon > dump + 1 && presents == strtoull(colon + 1, NULL, 10)) {
+            char path[512];
+            snprintf(path, sizeof path, "%.*s", (int)(colon - dump), dump);
+            FILE *f = fopen(path, "r");
+            char line[64];
+            while (f && fgets(line, sizeof line, f)) {
+                uint64_t a = strtoull(line, NULL, 16);
+                if (a >= 0x7000000000ull && a < 0x7800000000ull)
+                    LOG("[dump] %llx = %.9g (%08x)\n", (unsigned long long)a, *(const float *)(uintptr_t)a, *(const uint32_t *)(uintptr_t)a);
+            }
+            if (f) fclose(f);
+        }
+    }
     static const char *poke = (const char *)1;  // LARECOMP_POKE64=<guest addr>=<value>: written before every present (experiments)
     if (poke == (const char *)1) poke = getenv("LARECOMP_POKE64");
     if (poke) {
