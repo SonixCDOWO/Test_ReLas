@@ -15,6 +15,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `mod` / `game_lang` (larecomp.ini) | mod ativo (`mods/<nome>/`, o log mostra `[mods]` e quantos arquivos do romfs foram trocados) / idioma pedido ao sistema (`en-US`, `es`...; um save existente mantém o seu) |
 | `LARECOMP_LOG_FILES=1` | cada arquivo do romfs lido pelo jogo (descobrir onde está um texto ou imagem para um mod) |
 | `LARECOMP_TOUCH=<de>-<até>[@x,y[,largura]]` | um dedo indo e voltando em volta de x,y (pixels da tela 1920x1080; largura 0 = parado) entre esses frames; `@x,y>x2,y2` arrasta; vários trechos com `;`. Loga `[touch]`: começo e fim do toque, gestos e quem lê. Brincar com Eevee: `1440:X:6,1490:UP:6,1530:A:6,1640:A:6,1700:A:6`; carinho na testa `1760-1960@960,375`; botão de frutas `@1807,952,0`. O dedo do controle no script: `RSTICK_*` e `ZR` |
+| `SAVE=<savedata.bin ou pasta> tools/repro.sh ...` | roda o teste com outro save (copiado para `build/test-save`; o `save/` do jogador não é tocado). Os tempos do `LARECOMP_INPUT` mudam de um save para outro (tutoriais vistos ou não) |
 | `LARECOMP_DAYS_AHEAD=<n>` | relógio n dias à frente (coisas diárias: a fome do parceiro, que precisa ser maior que zero para ele comer) |
 | `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
 | `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |

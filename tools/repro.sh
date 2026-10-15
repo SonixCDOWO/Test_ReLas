@@ -10,6 +10,7 @@
 #           tools/repro.sh paleta 1300,1400 LARECOMP_VK_SKIN_IDENTITY=1
 #           EXE=./build/jogo/lasrecomp.exe tools/repro.sh jogo 1400   (a cópia do jogar.bat)
 #           RENDERDOC=1 tools/repro.sh rdc 1300 LARECOMP_RENDERDOC_AT=1290   (captura em build/rdc/)
+#           SAVE="$HOME/Downloads/savedata.bin" tools/repro.sh outro 1400   (outro save, copiado)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
@@ -22,7 +23,9 @@ rm -rf build/test-save "build/repro/$name"
 rm -f build/frames/*.png  # (files only: a removed folder still open somewhere stays "delete pending" and vanishes later)
 [ -n "${RENDERDOC:-}" ] && rm -rf build/rdc && mkdir -p build/rdc
 mkdir -p build/test-save "build/repro/$name" logs build/frames
-cp -r save/* build/test-save/
+# SAVE=<savedata.bin or a save folder>: another save (copied too; the player's save/ stays untouched)
+if [ -f "${SAVE:-}" ]; then mkdir -p build/test-save/save_0 && cp "$SAVE" build/test-save/save_0/savedata.bin
+else cp -r "${SAVE:-save}"/* build/test-save/; fi
 
 last=${shots##*,}
 start=$(date +%s)
