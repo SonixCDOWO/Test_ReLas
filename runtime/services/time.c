@@ -1,4 +1,5 @@
 // time:u / time:a / time:s
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -9,7 +10,12 @@
 static const uint8_t clock_uuid[16] = {0x4c, 0x41, 0x52, 0x65, 0x63, 0x6f, 0x6d, 0x70, 1, 2, 3, 4, 5, 6, 7, 8};
 
 static int64_t steady_seconds(void) { return (int64_t)(rt_ticks() / 19200000ull); }
-static int64_t unix_now(void) { return (int64_t)time(NULL); }
+// LARECOMP_DAYS_AHEAD=<n>: the clock n days ahead (tests of daily things: the partner's hunger, daily items)
+static int64_t unix_now(void) {
+    static int64_t ahead = -1;
+    if (ahead < 0) ahead = getenv("LARECOMP_DAYS_AHEAD") ? atoll(getenv("LARECOMP_DAYS_AHEAD")) * 86400 : 0;
+    return (int64_t)time(NULL) + ahead;
+}
 
 static void write_system_context(uint8_t *p) {  // SystemClockContext (0x20)
     int64_t steady = steady_seconds();

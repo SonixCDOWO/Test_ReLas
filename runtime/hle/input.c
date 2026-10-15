@@ -93,18 +93,26 @@ static void mouse_release(void) {
     touch_down = 0;
 }
 
-// Touch screen: the free mouse over the game image, in the Switch's 1280x720 screen. g_present_rect: where the
-// image is drawn in the window, in pixels (runtime/nvn/vulkan/device.c).
+// Touch screen: the free mouse over the game image. The game is told it is docked (runtime/services/am.c: a 1920 x
+// 1080 display, wider with LARECOMP_DISPLAY_W) and takes touches in that display's pixels - not the handheld panel's
+// 1280 x 720: in those, the berry button sat 2/3 of the way to where it was drawn and never opened.
+// g_present_rect: where the image is drawn in the window, in pixels (runtime/nvn/vulkan/device.c).
 double g_present_rect[4] = {0, 0, 1280, 720};
-static _Atomic int32_t touch_x = 640, touch_y = 360;
+static double touch_w(void) {
+    static double w = 0;
+    if (!w) w = getenv("LARECOMP_DISPLAY_W") ? atoi(getenv("LARECOMP_DISPLAY_W")) : 1920;
+    return w > 0 ? w : 1920;
+}
+#define TOUCH_H 1080.0
+static _Atomic int32_t touch_x = 960, touch_y = 540;
 static void touch_at(SDL_Window *w, float mx, float my) {
     float d = w ? SDL_GetWindowPixelDensity(w) : 1;
     if (d <= 0) d = 1;
     double r0 = g_present_rect[0], r1 = g_present_rect[1], r2 = g_present_rect[2], r3 = g_present_rect[3];
     if (r2 <= 0 || r3 <= 0) return;
-    double x = (mx * d - r0) / r2 * 1280, y = (my * d - r1) / r3 * 720;
-    touch_x = (int32_t)(x < 0 ? 0 : x > 1279 ? 1279 : x);
-    touch_y = (int32_t)(y < 0 ? 0 : y > 719 ? 719 : y);
+    double x = (mx * d - r0) / r2 * touch_w(), y = (my * d - r1) / r3 * TOUCH_H;
+    touch_x = (int32_t)(x < 0 ? 0 : x > touch_w() - 1 ? touch_w() - 1 : x);
+    touch_y = (int32_t)(y < 0 ? 0 : y > TOUCH_H - 1 ? TOUCH_H - 1 : y);
 }
 
 // Forget held keys (the menu took focus) and let the mouse go; the gamepad is re-read on its next event.
@@ -476,7 +484,8 @@ static void fill_state(Cpu *c) {
         LOG("[input] watching controller object %llx\n", c->x[1] - 8);
     }
     bool menu = menu_input_captured();  // the overlay menu / name entry has the controls (typing there isn't for the game)
-    uint64_t b = menu ? script_buttons : key_buttons | pad_buttons | mouse_buttons | script_buttons;
+    const uint64_t zr = 1ull << BTN_ZR;  // (the controller's ZR is its finger on the touch screen: pad_finger)
+    uint64_t b = menu ? script_buttons & ~zr : key_buttons | ((pad_buttons | script_buttons) & ~zr) | mouse_buttons;
     {   // injected Plus: held for ~10 presented frames (the game polls several times per frame)
         extern uint64_t renderer_present_count(void);
         static uint64_t until;
@@ -583,35 +592,100 @@ HLE_FUNC("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS
 
 // Touch screen: TouchScreenState<16> {int64 sampling; int32 count; pad; TouchState[16]}, TouchState (0x28) {int64
 // delta time; u32 attributes (bit 0 Start, bit 1 End); u32 finger id; u32 x, y; u32 diameter x, y; u32 rotation;
-// pad}. One finger: the free mouse (touch_at), or LARECOMP_TOUCH="<from>-<to>[@x,y]" (frames: a back-and-forth
-// petting stroke around x,y - default the middle of the screen - for tests).
+// pad}. One finger: the free mouse (touch_at), the controller's finger (pad_finger), or
+// LARECOMP_TOUCH="<from>-<to>[@x,y[,width]]" (frames: a back-and-forth petting stroke `width` wide - default 120,
+// 0 = a press in place - around x,y, default the middle of the screen; display pixels, 1920 x 1080) or "<from>-<to>@x,y>x2,y2" (a drag from x,y
+// to x2,y2); several segments separated by ';' (consecutive frames: one touch going on); for tests.
+static bool pad_finger(int32_t *x, int32_t *y);
 static bool touch_now(int32_t *x, int32_t *y) {
-    static int from = -1, to, cx = 640, cy = 330;
-    if (from < 0) {
-        from = 0;
-        const char *e = getenv("LARECOMP_TOUCH");
-        if (e) sscanf(e, "%d-%d@%d,%d", &from, &to, &cx, &cy);
+    static struct { int from, to, cx, cy, amp, ex, ey; } seg[8];
+    static int nseg = -1;
+    if (nseg < 0) {
+        nseg = 0;
+        for (const char *e = getenv("LARECOMP_TOUCH"); e && *e && nseg < 8; e = strchr(e, ';') ? strchr(e, ';') + 1 : NULL) {
+            seg[nseg] = (typeof(seg[0])){0, 0, 960, 495, 180, -1, -1};
+            sscanf(e, "%d-%d@%d,%d,%d", &seg[nseg].from, &seg[nseg].to, &seg[nseg].cx, &seg[nseg].cy, &seg[nseg].amp);
+            const char *gt = strchr(e, '>'), *semi = strchr(e, ';');
+            if (gt && (!semi || gt < semi)) sscanf(gt + 1, "%d,%d", &seg[nseg].ex, &seg[nseg].ey);
+            if (seg[nseg].from > 0) nseg++;
+        }
     }
     extern uint64_t renderer_present_count(void);
     uint64_t f = renderer_present_count();
-    if (from > 0 && f >= (uint64_t)from && f <= (uint64_t)to) {
-        double t = (double)(f - from);
-        *x = (int32_t)(cx + 120 * sin(t * 0.25));
-        *y = (int32_t)(cy + 20 * sin(t * 0.5));
+    for (int i = 0; i < nseg; i++) {
+        if (f < (uint64_t)seg[i].from || f > (uint64_t)seg[i].to) continue;
+        double t = (double)(f - seg[i].from), k = seg[i].to > seg[i].from ? t / (seg[i].to - seg[i].from) : 1;
+        *x = (int32_t)(seg[i].ex >= 0 ? seg[i].cx + (seg[i].ex - seg[i].cx) * k : seg[i].cx + seg[i].amp * sin(t * 0.25));
+        *y = (int32_t)(seg[i].ex >= 0 ? seg[i].cy + (seg[i].ey - seg[i].cy) * k : seg[i].cy + seg[i].amp / 6 * sin(t * 0.5));
         return true;
     }
+    if (pad_finger(x, y)) return true;
     *x = touch_x, *y = touch_y;
     return touch_down && !menu_input_captured();
 }
+// The controller as a finger (a controller has no touch screen, and Play with Eevee pets with one): the right stick
+// moves it over the screen - the overlay draws it (runtime/ui/menu.mm) - and ZR held touches there. ZR then doesn't
+// reach the game (fill_state; there it only repeats A).
+static double finger_x = 960, finger_y = 540;
+static _Atomic uint64_t finger_seen_ns;
+static _Atomic int finger_down;
+static bool pad_finger(int32_t *x, int32_t *y) {
+    static uint64_t last;
+    uint64_t now = SDL_GetTicksNS();
+    double dt = last ? (now - last) / 1e9 : 0;
+    if (dt > 0.1) dt = 0.1;
+    last = now;
+    int32_t rx = pad_rx + script_rx, ry = pad_ry + script_ry;
+    double ax = abs(rx) > 6000 ? rx / 32767.0 : 0, ay = abs(ry) > 6000 ? ry / 32767.0 : 0;
+    if (ax != 0 || ay != 0) {
+        finger_x += ax * 1000 * dt;  // (display pixels per second at full tilt: about 2 s across)
+        finger_y -= ay * 1000 * dt;
+        finger_x = finger_x < 0 ? 0 : finger_x > touch_w() - 1 ? touch_w() - 1 : finger_x;
+        finger_y = finger_y < 0 ? 0 : finger_y > TOUCH_H - 1 ? TOUCH_H - 1 : finger_y;
+        finger_seen_ns = now;
+    }
+    bool down = ((pad_buttons | script_buttons) >> BTN_ZR & 1) && !menu_input_captured();
+    if (down) finger_seen_ns = now;
+    finger_down = down;
+    *x = (int32_t)finger_x, *y = (int32_t)finger_y;
+    return down;
+}
+// Overlay (runtime/ui/menu.mm): where to draw the controller's finger, in window pixels, for 3 s after it last moved.
+bool input_finger_cursor(float *x, float *y, bool *down) {
+    uint64_t seen = finger_seen_ns;
+    if (!seen || SDL_GetTicksNS() - seen > 3000000000ull) return false;
+    *x = (float)(g_present_rect[0] + finger_x / touch_w() * g_present_rect[2]);
+    *y = (float)(g_present_rect[1] + finger_y / TOUCH_H * g_present_rect[3]);
+    *down = finger_down;
+    return true;
+}
+
+static void touch_caller_log(const char *what, uint64_t lr) {  // (LARECOMP_TOUCH runs: who reads touches / gestures)
+    static uint64_t seen[32];
+    static int n, on = -1;
+    if (on < 0) on = getenv("LARECOMP_TOUCH") != NULL;
+    if (!on) return;
+    for (int i = 0; i < n; i++) if (seen[i] == lr) return;
+    if (n < 32) seen[n++] = lr;
+    extern uint64_t renderer_present_count(void);
+    LOG("[touch] %s read from lr %llx (frame %llu)\n", what, (unsigned long long)lr, (unsigned long long)renderer_present_count());
+}
 HLE_FUNC("_ZN2nn3hid20GetTouchScreenStatesILm16EEEiPNS0_16TouchScreenStateIXT_EEEi", hid_touch_states) {
+    touch_caller_log("touch screen", c->x[30]);
     uint8_t *s = (uint8_t *)(uintptr_t)c->x[0];
     int count = (int)c->x[1];
     static int64_t sampling;
     static bool was_down;
+    static int32_t last_x, last_y;
     static int nlog;
     if (count <= 0) { c->x[0] = 0; return; }
     int32_t x, y;
     bool down = touch_now(&x, &y);
+    // The release sample keeps the finger where it was: the game checks every sample's position (finger id -> x, y),
+    // and a release reported elsewhere (the test's default, the mouse while the controller's finger let go) took the
+    // touch off an on-screen button before it ended - the berry button never opened.
+    if (down) last_x = x, last_y = y;
+    else x = last_x, y = last_y;
     memset(s, 0, 0x290);
     *(int64_t *)s = ++sampling;
     if (down || was_down) {  // (the release is one more sample, flagged End)
@@ -630,11 +704,75 @@ HLE_FUNC("_ZN2nn3hid20GetTouchScreenStatesILm16EEEiPNS0_16TouchScreenStateIXT_EE
     was_down = down;
     c->x[0] = 1;
 }
-// Gestures: none yet (logged: does the game use them?).
+// Gestures (Let's Go reads them at start-up only - its screens go by the raw touches above - but they are cheap to
+// keep right), recognized from the same finger as the system does: Touch (new touch) -> Press (held still 0.5 s) / Pan (moved, per frame) -> Tap
+// (short, still) or Swipe (fast) -> Complete. GestureState (0x60): int64 event number, int64 context number, u32 type
+// (0 idle, 1 complete, 2 cancel, 3 touch, 4 press, 5 tap, 6 pan, 7 swipe), u32 direction (0 none, 1 left, 2 up,
+// 3 right, 4 down), u32 x, y, s32 delta x, y, f32 velocity x, y, u32 attributes (bit 4 new touch), f32 scale,
+// f32 rotation, s32 point count, points[4] {u32 x, y}. The game reads the newest first and keeps the event number.
+typedef struct { int64_t num, ctx; uint32_t type, dir, x, y; int32_t dx, dy; float vx, vy; uint32_t attr; float scale, rot;
+                 int32_t npoints; uint32_t pts[8]; } Gesture;
+_Static_assert(sizeof(Gesture) == 0x60, "nn::hid::GestureState");
+static Gesture g_gestures[16];
+static int64_t g_gesture_num, g_gesture_ctx;
+static void gesture_emit(uint32_t type, uint32_t dir, int32_t x, int32_t y, int32_t dx, int32_t dy, float vx, float vy,
+                         uint32_t attr, bool point) {
+    if (getenv("LARECOMP_TOUCH")) LOG("[touch] gesture %u at %d,%d\n", type, x, y);
+    memmove(g_gestures + 1, g_gestures, sizeof g_gestures - sizeof g_gestures[0]);
+    Gesture *g = &g_gestures[0];
+    memset(g, 0, sizeof *g);
+    g->num = ++g_gesture_num;
+    g->ctx = g_gesture_ctx;
+    g->type = type, g->dir = dir, g->x = (uint32_t)x, g->y = (uint32_t)y, g->dx = dx, g->dy = dy, g->vx = vx, g->vy = vy;
+    g->attr = attr, g->scale = 1;
+    if (point) { g->npoints = 1; g->pts[0] = (uint32_t)x; g->pts[1] = (uint32_t)y; }
+}
+// Once per presented frame (the game may poll several times): the finger's new sample -> gesture events.
+static void gesture_update(void) {
+    extern uint64_t renderer_present_count(void);
+    static uint64_t frame = ~0ull, start_ns, last_ns;
+    static bool was, moved, pressed;
+    static int32_t sx, sy, lx, ly;
+    uint64_t f = renderer_present_count();
+    if (f == frame) return;
+    frame = f;
+    int32_t x, y;
+    bool down = touch_now(&x, &y);
+    uint64_t now = SDL_GetTicksNS();
+    double dt = last_ns ? (now - last_ns) / 1e9 : 1 / 30.0;
+    if (dt <= 0) dt = 1 / 30.0;
+    last_ns = now;
+    if (down && !was) {
+        g_gesture_ctx++;
+        sx = lx = x, sy = ly = y, start_ns = now, moved = pressed = false;
+        gesture_emit(3, 0, x, y, 0, 0, 0, 0, 1u << 4, true);  // Touch, new touch
+    } else if (down) {
+        if (!moved && (abs(x - sx) > 16 || abs(y - sy) > 16)) moved = true;
+        if (moved && (x != lx || y != ly)) {
+            gesture_emit(6, 0, x, y, x - lx, y - ly, (float)((x - lx) / dt), (float)((y - ly) / dt), 0, true);  // Pan
+        } else if (!moved && !pressed && now - start_ns > 500000000ull) {
+            pressed = true;
+            gesture_emit(4, 0, x, y, 0, 0, 0, 0, 0, true);  // Press
+        }
+        lx = x, ly = y;
+    } else if (was) {
+        double t = (now - start_ns) / 1e9, vx = (lx - sx) / (t > 0 ? t : 1), vy = (ly - sy) / (t > 0 ? t : 1);
+        if (!moved && !pressed) gesture_emit(5, 0, sx, sy, 0, 0, 0, 0, 0, true);  // Tap
+        else if (moved && t < 0.4 && fabs(vx) + fabs(vy) > 800) {  // Swipe
+            uint32_t dir = fabs(vx) > fabs(vy) ? (vx < 0 ? 1 : 3) : (vy < 0 ? 2 : 4);
+            gesture_emit(7, dir, lx, ly, lx - sx, ly - sy, (float)vx, (float)vy, 0, true);
+        }
+        gesture_emit(1, 0, lx, ly, 0, 0, 0, 0, 0, false);  // Complete
+    }
+    was = down;
+}
 HLE_FUNC("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", hid_gesture_states) {
-    static int nlog;
-    if (nlog++ < 3) LOG("[touch] GetGestureStates (lr %llx)\n", (unsigned long long)c->x[30]);
-    c->x[0] = 0;
+    touch_caller_log("gestures", c->x[30]);
+    gesture_update();
+    int count = (int)c->x[1], n = 0;
+    Gesture *out = (Gesture *)(uintptr_t)c->x[0];
+    for (; n < count && n < 16 && g_gestures[n].num; n++) out[n] = g_gestures[n];
+    c->x[0] = (uint64_t)n;
 }
 
 // Vibration devices: accepted but inert (the SDK's vibration node graph stays recompiled).
