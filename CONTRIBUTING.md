@@ -2,11 +2,6 @@
 
 Relatos de problemas, testes em outros PCs e código são bem-vindos.
 
-> [!NOTE]
-> O projeto é desenvolvido principalmente com IA (veja o README). Contribuições escritas à mão, com ajuda de IA ou
-> qualquer coisa no meio valem igualmente: o que importa é que a mudança funcione, tenha sido testada e siga as regras
-> abaixo.
-
 ## A regra que não muda: nada da Nintendo
 
 Nunca podem entrar no repositório nem em issues ou pull requests:

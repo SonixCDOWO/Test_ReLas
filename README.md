@@ -7,11 +7,6 @@ sistema do Switch (kernel, serviços, gráficos NVN → Vulkan, áudio, controle
 *In English: a native Windows port of Pokémon: Let's Go, Eevee! (Switch v1.0.0) by static recompilation, built on the
 [LAS Recomp](https://github.com/peiikai/LASRecomp) runtime. See [the English summary](#in-english) at the end.*
 
-> [!IMPORTANT]
-> **Este projeto foi feito quase inteiramente com IA.** Praticamente todo o código, a engenharia reversa e a
-> documentação foram escritos por uma IA (Claude, da Anthropic, pelo Claude Code), dirigida, testada e revisada por
-> uma pessoa, como foi o [LAS Recomp](https://github.com/peiikai/LASRecomp) em que ele se baseia. Use por sua conta.
-
 > [!NOTE]
 > **Nenhum arquivo do jogo está incluído.** Você precisa da sua própria cópia, obtida legalmente, dos arquivos
 > extraídos do *Pokémon: Let's Go, Eevee!* **v1.0.0**. Este repositório não fornece nem ensina a obter esses arquivos
@@ -132,8 +127,7 @@ cobre só este código e não dá nenhum direito sobre o jogo.
 ## In English
 
 **Let's Go Recomp** is a static recompilation of *Pokémon: Let's Go, Eevee!* (Nintendo Switch, v1.0.0) into a native
-Windows application, built on the [LAS Recomp](https://github.com/peiikai/LASRecomp) runtime. It was made almost
-entirely with AI (Claude, through Claude Code), directed and tested by a human. **No game files are included**: you
+Windows application, built on the [LAS Recomp](https://github.com/peiikai/LASRecomp) runtime. **No game files are included**: you
 need your own legally obtained copy of the extracted v1.0.0 game files; this repository does not explain how to get
 them.
 
