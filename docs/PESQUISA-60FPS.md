@@ -60,7 +60,7 @@ Riscos e incertezas:
 - É trabalho grande e exploratório: semanas, não dias. Mas é a mesma família de técnica que os ports bem-sucedidos
   usam.
 
-## Protótipo (15/10/2026): `LARECOMP_INTERP=1` / `jogar-60fps.bat`
+## Protótipo (15/10/2026): FPS 60 no launcher / `LARECOMP_INTERP=1`
 
 Implementado em `runtime/nvn/vulkan/exec.c` (seção "frame interpolation") e `device.c` (`backend_present`):
 - **Gravação**: as listas de comandos de cada quadro (com um hash do conteúdo), o estado de execução no início do
@@ -83,7 +83,7 @@ Resultados (Pallet Town, `tools/repro.sh` andando com o analógico):
   geometria, uma com par e outra sem); atraso de meio quadro (~17 ms) a mais.
 - **Não testado**: batalhas, cenas, efeitos com partículas e compute, sombras de objetos que surgem/somem.
 
-Para testar: `jogar-60fps.bat`, ou `LARECOMP_INTERP=1` + `LARECOMP_WINDOW_SHOT=<frame>` (grava `build/window_mid.png`,
+Para testar: escolher 60 fps no launcher (`larecomp.ini`: `fps = 60`), ou `LARECOMP_INTERP=1` + `LARECOMP_WINDOW_SHOT=<frame>` (grava `build/window_mid.png`,
 o intermediário, e `build/window.png`, o quadro). O `LARECOMP_SHOT_AT` grava a imagem do jogo depois da reexecução,
 ou seja, o intermediário.
 

@@ -42,9 +42,10 @@ make build/lasrecomp.exe    # compila o runtime
 ```
 
 ## Jogar
-Dê dois cliques em `jogar.bat` (o log vai para `logs\jogo.log`). Ele roda a cópia estável em `build/jogo/`, que
-`tools/publicar_jogo.sh` atualiza a partir do build atual. `jogar-60fps.bat` faz o mesmo com o protótipo de 60 fps
-por interpolação ligado (experimental). Ou, no Git Bash:
+Dê dois cliques em `jogar.bat` (o log vai para `logs\jogo.log`). Ele abre o launcher (resolução, FPS — 30 original ou
+60 por interpolação, experimental — e tela cheia, salvos no `larecomp.ini`) e depois o jogo, usando a cópia estável
+em `build/jogo/`, que `tools/publicar_jogo.sh` atualiza a partir do build atual. Ou, no Git Bash (`--play` pula o
+launcher):
 ```
 PATH="/c/msys64/ucrt64/bin:$PATH" ./build/lasrecomp.exe extracted --play
 ```

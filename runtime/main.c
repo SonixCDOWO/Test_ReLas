@@ -182,9 +182,14 @@ int main(int argc, char **argv) {
     }
     rt_paths_init();  // the data root becomes the working directory (runtime/paths.h)
     for (bool title = !skip_launcher;;) {
-        if (title) {  // start screen (runtime/ui/launcher.mm): game files setup, seed choice, settings
+        if (title) {  // start screen: resolution, frame rate, PLAY (runtime/ui/launcher_lg.mm; macOS: launcher.mm)
+#ifdef __APPLE__
             extern void launcher_run(const char *root);
             launcher_run(root);
+#else
+            extern void launcher_lg_run(const char *root);
+            launcher_lg_run(root);
+#endif
         }
         boot(root);
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested

@@ -71,7 +71,7 @@ static bool writable(const char *dir) {
 
 static void fail(const char *msg) {
     fprintf(stderr, "%s\n", msg);
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "LAS Recomp", msg, NULL);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, RT_APP_NAME, msg, NULL);
     exit(1);
 }
 
@@ -106,11 +106,11 @@ void rt_paths_init(void) {
     char msg[1400];
     if (!is_dir(root) || !writable(root) || chdir(root) != 0) {
 #ifdef _WIN32
-        snprintf(msg, sizeof msg, "LAS Recomp can't write to its folder:\n%s\n\nIt keeps game files, saves and seeds "
-                 "next to the program. Move the \"LAS Recomp\" folder somewhere you can write to (e.g. Documents or "
+        snprintf(msg, sizeof msg, RT_APP_NAME " can't write to its folder:\n%s\n\nIt keeps game files, saves and seeds "
+                 "next to the program. Move the \"" RT_APP_NAME "\" folder somewhere you can write to (e.g. Documents or "
                  "Desktop, not Program Files) and start it again.", root);
 #else
-        snprintf(msg, sizeof msg, "LAS Recomp can't write to its data folder:\n%s", root);
+        snprintf(msg, sizeof msg, RT_APP_NAME " can't write to its data folder:\n%s", root);
 #endif
         fail(msg);
     }
@@ -206,10 +206,10 @@ unsigned long long rt_game_files_size(const char *game_dir) {
     return n;
 }
 
-// Window / Dock icon: icon.png shipped next to the exe or in the .app (none for a plain source build).
+// Window / Dock icon: icon.png shipped next to the exe or in the .app, else the source tree's (docs/icon).
 void rt_window_icon(SDL_Window *w) {
     char p[1100];
-    if (!rt_resource("icon.png", NULL, p, sizeof p)) return;
+    if (!rt_resource("icon.png", "docs/icon/icon_1024.png", p, sizeof p)) return;
     SDL_Surface *s = SDL_LoadPNG(p);
     if (s) SDL_SetWindowIcon(w, s), SDL_DestroySurface(s);
 }

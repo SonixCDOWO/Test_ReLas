@@ -529,8 +529,9 @@ static int ip_on = -1;
 static bool ip_replaying;     // running a recorded frame again for the in-between image
 static uint64_t ip_draw_sig;  // the current draw's identity (draw_)
 static bool ip_enabled(void) {
-    if (ip_on < 0) ip_on = getenv("LARECOMP_INTERP") ? atoi(getenv("LARECOMP_INTERP")) : 0;
-    return ip_on > 0;
+    // LARECOMP_INTERP (tests) overrides the launcher's 30 / 60 fps choice (larecomp.ini fps)
+    if (ip_on == -1) ip_on = getenv("LARECOMP_INTERP") ? atoi(getenv("LARECOMP_INTERP")) : -2;
+    return ip_on == -2 ? g_settings.fps == 60 : ip_on > 0;
 }
 static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size);
 static void ip_note_list(uint64_t handle);

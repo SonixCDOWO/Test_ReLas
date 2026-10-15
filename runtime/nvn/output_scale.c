@@ -69,6 +69,7 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
     double h;
     int mode = g_settings.res_mode;
     if (forced > 0) h = forced;
+    else if (g_settings.res_height > 0) h = g_settings.res_height / 1080.0;  // (the launcher's choice)
     else if (mode >= 1 && mode <= 8) h = mode;
     else {
         h = reshape ? dh / 1080.0 : fit;  // Match display

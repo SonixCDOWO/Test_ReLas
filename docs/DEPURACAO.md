@@ -40,7 +40,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_SCAN_F32=<valor>:<tolerância>:<present>` | lista os float32 perto do valor nos dados do `main` e no heap naquele present (até 20.000) |
 | `LARECOMP_DUMP_F32=<arquivo>:<present>` | imprime os float32 dos endereços (hex, um por linha) do arquivo naquele present |
 | `LARECOMP_POKE64=<addr>=<valor>` | grava esse int64 no guest antes de cada present (experimentos) |
-| `LARECOMP_INTERP=1` | protótipo de 60 fps por interpolação ([PESQUISA-60FPS.md](PESQUISA-60FPS.md)); com `LARECOMP_WINDOW_SHOT` grava também o intermediário em `build/window_mid.png` |
+| `LARECOMP_INTERP=1` / `=0` | liga / desliga o protótipo de 60 fps por interpolação, por cima da escolha do launcher ([PESQUISA-60FPS.md](PESQUISA-60FPS.md)); com `LARECOMP_WINDOW_SHOT` grava também o intermediário em `build/window_mid.png` |
 | `LARECOMP_HIDE_FIRST_FRAMES=<n>` | janela preta nos n primeiros presents (padrão 2: o flash azul da abertura; 0 mostra tudo) |
 | `LARECOMP_WINDOW_SHOT=<frame>` | grava a imagem **da janela** em `build/window.png` (o `LARECOMP_SHOT_AT` grava a imagem do jogo, antes da janela) |
 | `LARECOMP_LOG_CLEARS=1` | cada limpeza de cor: frame, alvo, formato, máscara e a cor |

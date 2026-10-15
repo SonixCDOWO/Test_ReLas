@@ -20,7 +20,8 @@
 extern "C" {
 #endif
 
-#define RT_BUNDLE_ID "com.peiikai.lasrecomp"
+#define RT_BUNDLE_ID "com.peiikai.lasrecomp"  // (data folder on macOS / Linux: kept)
+#define RT_APP_NAME "Let's Go Recomp"         // window title, messages, the launcher
 
 void rt_paths_init(void);         // first thing in main(), after plat_init
 const char *rt_data_root(void);   // absolute
