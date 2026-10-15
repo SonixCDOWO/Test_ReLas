@@ -150,6 +150,25 @@ osso: modelos inteiros, animação mais rígida).
 | 24 | Alguns objetos nunca apareciam (1247 draws pulados como `failed` em 4 min de jogo) | `tools/perf_summary.py` no log de uma sessão longa; o log tinha `FS translate failed: unknown instruction df5800812ff70400` | o tradutor de shaders não conhecia a `TMML` (consulta do nível de mipmap que uma amostra usaria): o shader inteiro falhava e todo draw com ele era pulado. O shader do jogo usa o nível para limitar a amostra (`min(lod, 2)`) | `TMML` traduzida com `textureQueryLod` (ponto fixo 8.8, componentes na ordem inversa do GLSL, como no Ryujinx) | `runtime/nvn/maxwell/translate.c` |
 | 25 | Objetos aparecendo de novo na primeira vez em cada área depois de um crash | data do `cache/vk_pipelines.bin` | o cache de pipelines só era gravado ao fechar o jogo normalmente | gravado numa thread de fundo ~6 s depois que uma leva de pipelines novos termina (~90 ms, sem travar quadro) | `runtime/nvn/vulkan/exec.c` |
 
+
+## Parte 8: qualidade de imagem e pop-in (15/10/2026)
+
+Auditoria de um quadro da Rota 1 (`LARECOMP_DEBUG_FRAME`, imagens de cada passe) e da camada de validação do Vulkan:
+o quadro é mapa de sombras 2048² → cena HDR 1080p → cadeia de bloom (960x540 até 10x6) → composição → interface, sem
+draw faltando. A validação acusa só uma textura RGBA8 16x16 (o "sem sombra" do próprio jogo) lida por um amostrador
+de sombra: fora da especificação, mas a GPU NVIDIA compara o canal vermelho como o Tegra do Switch.
+
+| # | O quê | Medição | Mudança | Arquivo |
+|---|---|---|---|---|
+| 26 | Serrilhado: o jogo não tem antisserrilhado | prints da janela com e sem | o SMAA 1x herdado do LASRecomp (opção do menu Esc do Zelda, removido) volta ligado por padrão, com a caixa "Suavizar serrilhado" no launcher (chave nova `smaa` no ini: o `antialias = off` antigo era só o padrão salvo) | `runtime/settings.c`, `runtime/ui/launcher_lg.mm` |
+| 27 | Supersampling (1440p / 4K numa tela menor) reduzido com um só tap bilinear, que pula texels | sem limite de fps, gameplay a ~160 fps em 1080p, ~115 em 1440p e ~78 em 4K (RTX 3080): 4K numa tela 1080p sobra para 30 fps | a apresentação usa 4 taps bilineares espalhados na área de cada pixel da janela (em 2x exato, a média 2x2) | `runtime/nvn/vulkan/shaders.c` |
+| 28 | Texturas borradas em ângulo rasante (caminhos, grama ao fundo) | o jogo pede pouca ou nenhuma filtragem anisotrópica | 16x nos amostradores com mipmap e filtro linear (`LARECOMP_ANISO`) | `runtime/nvn/vulkan/textures.c` |
+| 29 | Objetos surgindo alguns quadros depois de cada leva de shaders novos | ~20-60 draws pulados por leva na gameplay; com cache, ~1 ms por programa | o draw espera o programa / pipeline ficar pronto, até 20 ms por quadro (a 30 fps sobram ~27 ms), em vez de ser pulado: zero draws pulados na gameplay, fps igual; os que sobram ficam na tela de carregamento (`LARECOMP_SHADER_WAIT_MS`) | `runtime/nvn/vulkan/exec.c` |
+
+Sombras: em 4K as bordas já saem suaves (o jogo filtra as sombras); um mapa maior que 2048² traria pouco e mexeria na
+escala de alvos que não são 16:9 - fica de fora. Física e lógica rodam o código do próprio jogo, recompilado: o
+comportamento é o do Switch.
+
 ---
 
 ## Lições aprendidas

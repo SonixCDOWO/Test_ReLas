@@ -855,6 +855,15 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     if (si.maxLod < si.minLod) si.maxLod = si.minLod;
     si.mipLodBias = d->lod_bias;
     if (d->max_aniso > 1) { si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = fminf(d->max_aniso, 16); }
+    // Anisotropic filtering raised to 16x (textures stay sharp at grazing angles: paths and grass towards the top of
+    // the screen): the game asks for little or none, sized for the Switch. Mipmapped, linearly filtered colour samplers
+    // only. LARECOMP_ANISO=<n> chooses (0 or 1: the game's own).
+    static int aniso = -1;
+    if (aniso < 0) aniso = getenv("LARECOMP_ANISO") ? atoi(getenv("LARECOMP_ANISO")) : 16;
+    if (aniso > 1 && mf >= 2 && si.minFilter == VK_FILTER_LINEAR && !d->compare_mode) {
+        si.anisotropyEnable = VK_TRUE;
+        si.maxAnisotropy = fmaxf(si.maxAnisotropy, fminf((float)aniso, 16));
+    }
     static float lodmin = -1;
     if (lodmin < 0) lodmin = getenv("LARECOMP_LOD_MIN") ? (float)atof(getenv("LARECOMP_LOD_MIN")) : 0;
     if (lodmin > 0 && mf > 1) si.minLod = fmaxf(si.minLod, lodmin);

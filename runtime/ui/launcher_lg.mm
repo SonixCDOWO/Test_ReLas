@@ -1,6 +1,6 @@
-// Let's Go Recomp start screen: resolution, fullscreen, Play - nothing else. Replaces LASRecomp's start
+// Let's Go Recomp start screen: resolution, fullscreen, anti-aliasing, Play - nothing else. Replaces LASRecomp's start
 // screen (launcher.mm: Link's Awakening's randomizer, seeds, update check, game-file setup) on Windows / Linux; macOS
-// keeps the old one. The choices go to larecomp.ini (settings.c: render_height, fullscreen).
+// keeps the old one. The choices go to larecomp.ini (settings.c: render_height, fullscreen, smaa).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
 // LARECOMP_LAUNCHER_AUTOPLAY=1 plays at once.
 #include <SDL3/SDL.h>
@@ -51,7 +51,7 @@ extern "C" void launcher_lg_run(const char *root) {
     static const int res_lines[] = {0, 720, 1080, 1440, 2160};
     int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
-    bool full = g_settings.fullscreen;
+    bool full = g_settings.fullscreen, smaa = g_settings.antialias == AA_SMAA;
     long shot_at = getenv("LARECOMP_LAUNCHER_SHOT") ? atol(getenv("LARECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
     bool play = getenv("LARECOMP_LAUNCHER_AUTOPLAY") != NULL;
     static const float bg[4] = {0.08f, 0.08f, 0.10f, 1};
@@ -73,6 +73,7 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::PushItemWidth(420);
         ImGui::Combo("Resolução", &res, res_names, 5);
         if (ImGui::Checkbox("Tela cheia", &full)) SDL_SetWindowFullscreen(win, full);
+        ImGui::Checkbox("Suavizar serrilhado", &smaa);
         ImGui::PopItemWidth();
         ImGui::Spacing();
         if (frame == 0) ImGui::SetKeyboardFocusHere();
@@ -88,6 +89,7 @@ extern "C" void launcher_lg_run(const char *root) {
     }
     g_settings.res_height = res_lines[res];
     g_settings.fullscreen = full;
+    g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
     settings_save();
     vk_imgui_backend_shutdown();
     ImGui_ImplSDL3_Shutdown();

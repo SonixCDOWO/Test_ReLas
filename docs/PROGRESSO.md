@@ -29,7 +29,10 @@ _Atualizado em 15/10/2026._
    (mínimo 28,6 por janela de 2 s, nenhum quadro acima de 50 ms fora o print do teste, nenhum underrun de áudio) numa
    RTX 3080. Ao entrar numa área, ~0,3 s de objetos aparecendo enquanto os shaders novos ficam prontos (com cache: ~200 ms
    de tradução e ~90 ms de SPIR-V para ~380 programas); na primeira vez sem cache, alguns segundos. O cache de pipelines
-   agora é salvo durante o jogo, não só ao fechar.
+   agora é salvo durante o jogo, não só ao fechar. Na gameplay, um draw espera seu shader (até 20 ms por quadro) em vez de
+   sumir: zero draws pulados depois do carregamento. Qualidade: SMAA ligado, filtro anisotrópico 16x e supersampling bem
+   reduzido (1440p / 4K no launcher numa tela menor; 4K roda a ~78 fps sem limite numa RTX 3080). Detalhes em
+   [HISTORICO.md, parte 8](HISTORICO.md).
 5. **60 fps de verdade**: a lógica do jogo anda um passo por quadro. Com `LARECOMP_FPS=60` ele chega ao mesmo estado
    no mesmo número de quadro em metade do tempo, ou seja, roda em velocidade dobrada (medido em 15/10/2026 com
    `tools/repro.sh`). 60 fps exigiria mudar o passo de tempo do próprio jogo. O que já se sabe:
