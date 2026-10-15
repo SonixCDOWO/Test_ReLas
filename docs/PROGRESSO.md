@@ -44,7 +44,7 @@ _Atualizado em 15/10/2026._
      inteiro perto de 33,3 ms também é fixo e não altera nada. Ou seja, cada sistema avança por quadro.
    - Conclusão: 60 fps na velocidade certa não sai de um patch. Os caminhos seriam gerar quadros intermediários
      (interpolação no runtime, sem vetores de movimento do jogo: artefatos, principalmente na interface) ou um
-     programa externo de geração de quadros.
+     programa externo de geração de quadros. Pesquisa das técnicas usadas por outros ports: [PESQUISA-60FPS.md](PESQUISA-60FPS.md).
 
 ## Correções no runtime (resumo)
 | Área | Correção | Arquivo |
