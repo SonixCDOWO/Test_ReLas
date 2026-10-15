@@ -35,6 +35,9 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_VK_UBO_DIRECT=1` | uniforms lidos direto da memória do jogo na GPU (experimento) |
 | `LARECOMP_VK_COPY_VERTICES=1` | copia vértices em vez de ler direto (experimento) |
 | `LARECOMP_NO_SCALE=1` | desliga a escala de resolução interna |
+| `LARECOMP_LOG_INTERVAL=1` | cada `SetPresentInterval` do jogo, com a cadeia de chamadores do guest (frame pointers) |
+| `LARECOMP_WATCH64=<addr>` | imprime o int64 nesse endereço do guest a cada 30 presents |
+| `LARECOMP_POKE64=<addr>=<valor>` | grava esse int64 no guest antes de cada present (experimentos) |
 | `LARECOMP_HIDE_FIRST_FRAMES=<n>` | janela preta nos n primeiros presents (padrão 2: o flash azul da abertura; 0 mostra tudo) |
 | `LARECOMP_WINDOW_SHOT=<frame>` | grava a imagem **da janela** em `build/window.png` (o `LARECOMP_SHOT_AT` grava a imagem do jogo, antes da janela) |
 | `LARECOMP_LOG_CLEARS=1` | cada limpeza de cor: frame, alvo, formato, máscara e a cor |
@@ -72,6 +75,12 @@ RDC=<captura.rdc> EID=<evento> OUT=<arquivo.txt> USERPROFILE="$H" HOME="$H"   "/
   mediana. Exporta `build/rdc/draw_<eid>/` no formato do harness (`verts.bin`, `cbN.bin`, `gpu_pos.bin`).
 
 Não ligue debug info nos shaders para capturar: com milhares de shaders, o replay leva mais de 20 minutos só para abrir.
+
+### Referências cruzadas no código do jogo (`tools/xrefs.py`)
+`cd tools && ../.venv/Scripts/python xrefs.py calls <addr>` (quem chama a função que contém o endereço), `imm <valor>`
+(instruções com esse imediato) ou `float <valor>` (onde a constante está e quem a carrega). A desmontagem do `main`
+fica em cache em `build/xrefs-main.pkl`. Chamadas por vtable não aparecem: para essas, a cadeia de chamadores em tempo
+de execução (como no `LARECOMP_LOG_INTERVAL`) é o caminho.
 
 ### Jogar enquanto se testa
 `jogar.bat` roda a cópia estável em `build/jogo/`. `tools/publicar_jogo.sh` (com o jogo fechado) copia o build atual

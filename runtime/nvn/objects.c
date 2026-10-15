@@ -602,7 +602,10 @@ NVN(nvnWindowBuilderSetDevice) { G(uint64_t, A(0), 0) = A(1); }
 NVN(nvnWindowBuilderSetDefaults) { memset(AP(0) + 8, 0, 0x20); G(uint32_t, A(0), 0x20) = 1; }
 NVN(nvnWindowBuilderSetNativeWindow) { G(uint64_t, A(0), 8) = A(1); }
 NVN(nvnWindowBuilderSetTextures) { G(uint32_t, A(0), 0x10) = (uint32_t)A(1); G(uint64_t, A(0), 0x18) = A(2); }
-NVN(nvnWindowBuilderSetPresentInterval) { G(uint32_t, A(0), 0x20) = (uint32_t)A(1); }
+NVN(nvnWindowBuilderSetPresentInterval) {
+    G(uint32_t, A(0), 0x20) = (uint32_t)A(1);
+    if (getenv("LARECOMP_LOG_INTERVAL")) LOG("[nvn] WindowBuilderSetPresentInterval %llu (lr %llx)\n", (unsigned long long)A(1), (unsigned long long)c->x[30]);
+}
 NVN(nvnWindowBuilderSetNumActiveTextures) { G(uint32_t, A(0), 0x24) = (uint32_t)A(1); }
 NVN(nvnWindowBuilderGetDevice) { RET(G(uint64_t, A(0), 0)); }
 NVN(nvnWindowBuilderGetNativeWindow) { RET(G(uint64_t, A(0), 8)); }
@@ -633,7 +636,21 @@ NVN(nvnWindowGetNumTextures) { RET(WIN->num); }
 NVN(nvnWindowGetNumActiveTextures) { RET(WIN->active); }
 NVN(nvnWindowSetNumActiveTextures) { WIN->active = (int)A(1); }
 NVN(nvnWindowGetPresentInterval) { RET(WIN->interval); }
-NVN(nvnWindowSetPresentInterval) { WIN->interval = (int)A(1); }
+NVN(nvnWindowSetPresentInterval) {
+    WIN->interval = (int)A(1);
+    if (getenv("LARECOMP_LOG_INTERVAL")) {  // (the game's frame-rate setting: who sets it - guest frame-pointer chain)
+        LOG("[nvn] WindowSetPresentInterval %llu (lr %llx) callers:", (unsigned long long)A(1), (unsigned long long)c->x[30]);
+        uint64_t fp = c->x[29];
+        for (int i = 0; i < 12 && fp >= 0x7000000000ull && fp < 0x7800000000ull && !(fp & 7); i++) {
+            LOG(" %llx", (unsigned long long)((uint64_t *)(uintptr_t)fp)[1]);
+            fp = ((uint64_t *)(uintptr_t)fp)[0];
+        }
+        // (Let's Go main loop, 0x7000029e80: interval = clamp(config[+8] / (*G - 1), 1, 5), G at *0x70015fb438 =
+        // 16666667 ns, one 60 Hz vsync - docs/PROGRESSO.md, 60 fps)
+        const uint64_t *g = *(const uint64_t **)(uintptr_t)0x70015fb438ull;
+        LOG(" | G = %lld\n", g ? (long long)*g : 0);
+    }
+}
 NVN(nvnWindowSetCrop) { int *cr = WIN->crop; cr[0] = (int)A(1); cr[1] = (int)A(2); cr[2] = (int)A(3); cr[3] = (int)A(4); }
 NVN(nvnWindowGetCrop) { memcpy(AP(1), WIN->crop, 16); }
 NVN(nvnWindowAcquireTexture) {
@@ -673,6 +690,17 @@ static void present_pace(int interval) {
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
+    static uint64_t watch = ~0ull, presents;  // LARECOMP_WATCH64=<guest addr>: its int64 every 30 presents (debug)
+    if (watch == ~0ull) watch = getenv("LARECOMP_WATCH64") ? strtoull(getenv("LARECOMP_WATCH64"), NULL, 0) : 0;
+    if (watch && presents++ % 30 == 0)
+        LOG("[watch] present %llu: %llx = %lld\n", (unsigned long long)presents, (unsigned long long)watch, (long long)*(const int64_t *)(uintptr_t)watch);
+    static const char *poke = (const char *)1;  // LARECOMP_POKE64=<guest addr>=<value>: written before every present (experiments)
+    if (poke == (const char *)1) poke = getenv("LARECOMP_POKE64");
+    if (poke) {
+        char *eq;
+        uint64_t pa = strtoull(poke, &eq, 0);
+        if (*eq == '=' && pa >= 0x7000000000ull) *(int64_t *)(uintptr_t)pa = strtoll(eq + 1, NULL, 0);
+    }
     present_pace(w->interval);
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
 }

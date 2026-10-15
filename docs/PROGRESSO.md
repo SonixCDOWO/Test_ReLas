@@ -29,7 +29,17 @@ _Atualizado em 15/10/2026._
    aguenta ~60. Gameplay longo ainda não foi medido.
 5. **60 fps de verdade**: a lógica do jogo anda um passo por quadro. Com `LARECOMP_FPS=60` ele chega ao mesmo estado
    no mesmo número de quadro em metade do tempo, ou seja, roda em velocidade dobrada (medido em 15/10/2026 com
-   `tools/repro.sh`). 60 fps exigiria mudar o passo de tempo do próprio jogo.
+   `tools/repro.sh`). 60 fps exigiria mudar o passo de tempo do próprio jogo. O que já se sabe:
+   - O motor escolhe o intervalo de present no fim de quadro (`0x7000029e80`, função `0x7000029d30`):
+     `clamp(config[+8] / (G − 1), 1, 5)`, com `G` = 16.666.667 ns (um vsync de 60 Hz, ponteiro em `0x70015fb438`). O
+     resultado é 2 e só é aplicado uma vez (`SetPresentInterval 2`, via `0x70005e79c0`); mesmo pacejado a 60, o jogo não
+     pede intervalo 1, então `config[+8]` é fixo (~33,3 ms), não uma medida.
+   - O único valor perto de 33,3 ms achado nos dados do `main` e no heap (`33.412.440` em `0x727eeccb68`) não é esse:
+     trocá-lo por 16.666.667 não muda nada.
+   - O float 1/30 aparece uma vez (`0x7000f47428`), usado só numa função de interpolação (`0x7000611440`), não no laço.
+   - O laço do aplicativo (`0x70000231a0`) chama a atualização (`0x700001d1c0`) e depois o fim de quadro por vtable.
+     Próximo passo: achar, dentro da atualização, se há um passo de tempo global (multiplicador de velocidade) ou se
+     cada sistema conta quadros (aí 60 fps exigiria interpolação no runtime, não um patch).
 
 ## Correções no runtime (resumo)
 | Área | Correção | Arquivo |
