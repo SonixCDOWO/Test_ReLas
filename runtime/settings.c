@@ -42,6 +42,7 @@ void settings_load(void) {
         if (sscanf(line, " %63[^= ] = %127[^\n]", key, val) < 1) continue;
         if (!strcmp(key, "game_lang") || !strcmp(key, "mod")) {  // (may be empty)
             if (sscanf(line, " %63[^= ] = %127[^\n]", key, val) != 2) val[0] = 0;
+            for (size_t n = strlen(val); n && (val[n - 1] == '\r' || val[n - 1] == ' '); n--) val[n - 1] = 0;  // (edited by hand: CRLF)
             if (key[0] == 'g') strlcpy(g_settings.game_lang, val, sizeof g_settings.game_lang);
             else strlcpy(g_settings.mod, val, sizeof g_settings.mod);
             continue;

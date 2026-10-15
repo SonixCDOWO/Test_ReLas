@@ -1,34 +1,36 @@
-# Contribuindo
+# Contributing
 
-Relatos de problemas, testes em outros PCs e código são bem-vindos.
+Bug reports, test results from other PCs and code are all welcome. Issues and pull requests can be written in
+English or Portuguese.
 
-## A regra que não muda: nada da Nintendo
+## The rule that never changes: nothing from Nintendo
 
-Nunca podem entrar no repositório nem em issues ou pull requests:
+Never post any of these in the repository, issues or pull requests:
 
-- cópias do jogo em qualquer formato (`.xci`, `.nsp`, `.nca`…), chaves (`prod.keys`, `title.keys`)
-- arquivos extraídos (`extracted/`), código gerado (`generated/`), fontes do sistema do Switch (`.bfttf`)
-- qualquer asset do jogo: texturas, modelos, música, textos, arquivos do romfs, nem "só um arquivo para testar"
-- saves (`save/`) e mods com arquivos do jogo (`mods/`)
+- copies of the game in any format (`.xci`, `.nsp`, `.nca`...), keys (`prod.keys`, `title.keys`)
+- extracted files (`extracted/`), generated code (`generated/`), the Switch's system fonts (`.bfttf`)
+- any game asset: textures, models, music, text, romfs files, not even "just one file to test"
+- saves (`save/`) and mods containing game files (`mods/`)
 
-Prints e vídeos curtos do jogo em relatos de problema são bem-vindos.
+Screenshots and short videos of the game in bug reports are welcome.
 
-## Reportando problemas
+## Reporting problems
 
-Abra um issue com:
+Open an issue with:
 
-- o seu PC: CPU, GPU, versão do driver e tamanho da janela ou resolução escolhida
-- o que você fez, o que aconteceu e o que esperava
-- um print ou vídeo curto, se for visual
-- se o jogo fechou ou travou: o `logs\jogo.log` (o `jogar.bat` grava ali)
-- se usava tradução ou mod, qual
+- your PC: CPU, GPU, driver version, and the window size or resolution you chose
+- what you did, what happened, and what you expected
+- a screenshot or a short video, if it's visual
+- if the game closed or froze: the `lasrecomp.log` file next to `LetsGoRecomp.exe`
+- if you were using a translation or mod, which one
 
-## Código
+## Code
 
-- Compile e teste como em [docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md).
-- Cada correção ganha uma linha em [docs/HISTORICO.md](docs/HISTORICO.md) (sintoma, diagnóstico, causa, correção), e
-  [docs/PROGRESSO.md](docs/PROGRESSO.md) acompanha o estado.
-- Variáveis e ferramentas de teste novas vão para [docs/DEPURACAO.md](docs/DEPURACAO.md).
-- O runtime veio do LAS Recomp, feito para o Zelda. Antes de culpar o jogo, confira se uma suposição do runtime vale
-  para o Let's Go (formatos, estilos de controle, códigos de retorno, resolução informada).
-- Para mudar o comportamento do jogo sem gerar a DLL de novo, use os ganchos de função (`runtime/fnhook.c`).
+- Build and test as in [docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md).
+- Every fix gets a line in [docs/HISTORICO.md](docs/HISTORICO.md) (symptom, diagnosis, cause, fix), and
+  [docs/PROGRESSO.md](docs/PROGRESSO.md) tracks the current state.
+- New debugging variables and tools go in [docs/DEPURACAO.md](docs/DEPURACAO.md).
+- The runtime came from LAS Recomp, made for Zelda. Before blaming the game, check whether one of the runtime's
+  assumptions holds for Let's Go (formats, controller styles, return codes, reported resolution).
+- To change the game's behavior without rebuilding the game code library, use the function hooks
+  (`runtime/fnhook.c`).

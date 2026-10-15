@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# publicar_jogo.sh: copia o build atual (build/lasrecomp.exe + build/lasgame.dll) para build/jogo/, a cópia que o
-# jogar.bat roda. Assim dá para recompilar e testar em build/ enquanto o jogo está aberto (o exe em uso fica travado
+# publicar_jogo.sh (make jogo): copia o build atual (build/lasrecomp.exe + build/lasgame.dll) para build/jogo/, a
+# cópia para jogar. Assim dá para recompilar e testar em build/ enquanto o jogo está aberto (o exe em uso fica travado
 # no Windows). Rode só com o jogo fechado e com um build que já foi validado (tools/repro.sh).
 # Leva junto as DLLs do MSYS2 de que o exe precisa e o ícone: build/jogo/lasrecomp.exe abre também com duplo clique
-# (sem o PATH que o jogar.bat põe); o runtime acha a pasta extracted/ duas pastas acima (runtime/paths.c).
+# (sem o MSYS2 no PATH); o runtime acha a pasta extracted/ duas pastas acima (runtime/paths.c).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"

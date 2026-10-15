@@ -4,11 +4,16 @@
 #include "mods.h"
 
 #include <dirent.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #include "hle.h"
+#include "platform.h"
+#include "romfs_build.h"
 #include "settings.h"
 
 static bool is_dir(const char *p) {
@@ -101,4 +106,83 @@ const char *game_language(void) {
     const char *m = mod_language(g_settings.mod);
     if (m) return m;
     return g_settings.game_lang[0] ? g_settings.game_lang : "en-US";
+}
+
+// ------------------------------------------------------------------ installing a mod (the start screen's button)
+static void rm_tree(const char *p) {  // (only ever called on folders under mods/)
+    DIR *d = opendir(p);
+    if (!d) { remove(p); return; }
+    char c[1100];
+    for (struct dirent *e; (e = readdir(d));) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        snprintf(c, sizeof c, "%s/%s", p, e->d_name);
+        if (is_dir(c)) rm_tree(c);
+        else remove(c);
+    }
+    closedir(d);
+    rmdir(p);
+}
+
+static _Atomic int g_install_state;
+static char g_install_src[1024], g_install_name[128];
+int mod_install_state(void) { return g_install_state; }
+const char *mod_install_name(void) { return g_install_name; }
+
+static void *install_thread(void *arg) {
+    (void)arg;
+    const char *src = g_install_src, *base = src;
+    for (const char *c = src; *c; c++) if (*c == '/' || *c == '\\') base = c + 1;
+    // the name: the file / folder name without its extension, letters, digits, spaces, '-' and '.' only
+    char name[128];
+    int n = 0;
+    for (const char *c = base; *c && n < 60; c++) {
+        unsigned char ch = (unsigned char)*c;
+        name[n++] = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == ' ' || ch == '.' ? (char)ch : '_';
+    }
+    name[n] = 0;
+    char *dot = strrchr(name, '.');
+    if (dot && !is_dir(src)) *dot = 0;
+    while (n && name[strlen(name) - 1] == ' ') name[strlen(name) - 1] = 0;
+    if (!name[0]) snprintf(name, sizeof name, "mod");
+    mkdir("mods", 0755);
+    const char *root = src;
+    if (!is_dir(src)) {  // an archive: Windows' own tar (libarchive: .zip, .rar, .7z) into mods/.install
+        rm_tree("mods/.install");
+        mkdir("mods/.install", 0755);
+        char tar[600];
+        const char *sys = getenv("SystemRoot");
+        snprintf(tar, sizeof tar, "%s\\System32\\tar.exe", sys ? sys : "C:\\Windows");
+        const char *argv[] = {tar, "-xf", src, "-C", "mods/.install", NULL};
+        PlatProc p = plat_spawn(argv, "mods/.install.log", false);
+        int r = p ? plat_proc_wait(p, true) : -1;
+        remove("mods/.install.log");
+        if (r != 0) { LOG("[mods] couldn't unpack %s (tar %d)\n", src, r); g_install_state = MOD_INSTALL_FAIL_UNPACK; goto done; }
+        root = "mods/.install";
+    }
+    {
+        char romfs[1024];
+        if (!find_romfs(root, 6, romfs, sizeof romfs)) { g_install_state = MOD_INSTALL_FAIL_NOT_MOD; goto done; }
+        char dst[300];
+        snprintf(dst, sizeof dst, "mods/%s", name);
+        if (is_dir(dst)) rm_tree(dst);
+        mkdir(dst, 0755);
+        strlcat(dst, "/romfs", sizeof dst);
+        if (!romfs_copy_tree(romfs, dst, NULL)) { g_install_state = MOD_INSTALL_FAIL_UNPACK; goto done; }
+        snprintf(g_install_name, sizeof g_install_name, "%s", name);
+        LOG("[mods] installed %s from %s\n", name, src);
+        g_install_state = MOD_INSTALL_DONE;
+    }
+done:
+    rm_tree("mods/.install");
+    return NULL;
+}
+
+void mod_install_start(const char *src) {
+    if (g_install_state == MOD_INSTALL_RUNNING) return;
+    snprintf(g_install_src, sizeof g_install_src, "%s", src);
+    g_install_name[0] = 0;
+    g_install_state = MOD_INSTALL_RUNNING;
+    pthread_t t;
+    pthread_create(&t, NULL, install_thread, NULL);
+    pthread_detach(t);
 }

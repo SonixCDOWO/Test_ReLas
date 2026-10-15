@@ -1,136 +1,327 @@
 # Let's Go Recomp
 
-Port nativo para Windows do **Pokémon: Let's Go, Eevee!** (Nintendo Switch, v1.0.0), feito por **recompilação
-estática**: o código ARM64 do jogo é traduzido para C e compilado como um programa do Windows. Um runtime substitui o
-sistema do Switch (kernel, serviços, gráficos NVN → Vulkan, áudio, controles, tela de toque). **Não é um emulador.**
+A native Windows port of **Pokémon: Let's Go, Eevee!** (Nintendo Switch, v1.0.0) made by **static recompilation**.
+The game's ARM64 code is translated into C and compiled into a regular Windows program; a runtime stands in for the
+Switch's operating system (kernel, system services, NVN graphics on Vulkan, audio, controllers, touch screen).
+**It is not an emulator.**
 
-*In English: a native Windows port of Pokémon: Let's Go, Eevee! (Switch v1.0.0) by static recompilation, built on the
-[LAS Recomp](https://github.com/peiikai/LASRecomp) runtime. See [the English summary](#in-english) at the end.*
+This project is built on the runtime and recompiler of **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by
+Peiikai, the static recompilation of *The Legend of Zelda: Link's Awakening*, adapted here to a different game
+engine.
 
-> [!NOTE]
-> **Nenhum arquivo do jogo está incluído.** Você precisa da sua própria cópia, obtida legalmente, dos arquivos
-> extraídos do *Pokémon: Let's Go, Eevee!* **v1.0.0**. Este repositório não fornece nem ensina a obter esses arquivos
-> (nem chaves). Nada do jogo (código, imagens, textos, músicas, fontes) faz parte do repositório.
+> [!IMPORTANT]
+> **No game files are included.** You need your own legally obtained copy of *Pokémon: Let's Go, Eevee!*
+> **version 1.0.0**, extracted (the `exefs` and `romfs` folders). This repository does not provide the game, its
+> keys, or instructions on how to obtain them. Nothing from the game (code, graphics, text, music, fonts) is part of
+> this repository or of its releases.
 
-![Cidade de Viridian em 1080p](docs/viridian.jpg)
+*Português: [veja a seção em português](#português) no fim, com o passo a passo da tradução PT-BR.*
 
-## Estado
+![Viridian City at 1080p](docs/viridian.jpg)
 
-Jogável: abertura, introdução, exploração, capturas, batalhas, menus, salvar e carregar, a **30 fps estáveis** (a
-taxa original do jogo) em resoluções de 720p a 4K. Detalhes em [docs/PROGRESSO.md](docs/PROGRESSO.md).
+## Contents
+- [Status](#status)
+- [Requirements](#requirements)
+- [How to play](#how-to-play)
+- [Features](#features)
+- [Controls](#controls)
+- [Translations and mods](#translations-and-mods)
+- [What was tested](#what-was-tested)
+- [Known issues and limitations](#known-issues-and-limitations)
+- [How it works](#how-it-works)
+- [Building from source](#building-from-source)
+- [FAQ](#faq)
+- [Documentation](#documentation)
+- [Credits](#credits)
+- [Legal](#legal)
+- [License](#license)
+- [Português](#português)
 
-### Problemas conhecidos
-- Só a versão **Eevee v1.0.0** e só **Windows** (o caminho de Linux veio do LAS Recomp, mas não foi testado aqui).
-- **60 fps não é possível** por enquanto: a lógica do jogo avança um passo por quadro (dobrar os quadros dobra a
-  velocidade). A pesquisa está em [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md).
-- Na **primeira vez** que um objeto aparece no seu PC, ele pode surgir 1 ou 2 quadros atrasado, enquanto o driver
-  prepara o shader. Da segunda vez em diante o cache resolve.
-- O giroscópio de controles com sensor (DualSense, Pro Controller) não é usado: a mira é pelo analógico ou pelo mouse.
-- Recursos online (GO Park, trocas, batalhas online, Poké Ball Plus) ficam desligados.
+## Status
 
-## Recursos
-- **Nativo:** o código do jogo roda compilado, não emulado.
-- **Imagem:**
-  - resolução interna de 720p a 4K, inclusive acima da tela (supersampling, com redução de boa qualidade);
-  - SMAA contra serrilhado e filtro anisotrópico 16×;
-  - qualquer tamanho e proporção de janela, e tela cheia.
-- **Sem travadas de shader:** shaders traduzidos em paralelo, cache de SPIR-V e de pipelines em disco, e os objetos
-  esperam o shader ficar pronto em vez de sumirem.
-- **Launcher simples:** resolução, tela cheia, antisserrilhado, tradução e o mapeamento do teclado.
-- **Controles:**
-  - **controle:** qualquer um reconhecido pelo SDL, no layout do modo portátil;
-  - **teclado:** todas as teclas podem ser trocadas no launcher;
-  - **mouse:** mira a Poké Ball como o giroscópio do Switch e serve de dedo na tela de toque ("Brincar com Eevee":
-    carinho e frutas);
-  - **só com controle:** a tela de toque também funciona, com o analógico direito movendo um dedo e o ZR tocando.
-- **Traduções e mods:** pasta `mods/` no formato do Atmosphere (LayeredFS), escolhida no launcher. Testado com a
-  tradução PT-BR de fãs do grupo Pokémon Switch Brasil.
+**Playable.** The opening movie, the introduction, exploring, wild captures, trainer battles, menus, the Pokédex,
+Play with Eevee, and saving and loading all work, at a **stable 30 fps** (the game's own frame rate) at any
+resolution from 720p to 4K. Only the **Eevee** version, **v1.0.0**, on **Windows**. It has not been played from
+start to finish yet: see [What was tested](#what-was-tested).
 
-![O launcher](docs/launcher.png)
+## Requirements
 
-## Como jogar
+| | Minimum |
+|---|---|
+| OS | Windows 10 or 11, 64-bit |
+| CPU | x86-64 with **AVX2** (Intel Haswell / 4th gen Core, AMD Ryzen or newer); checked at startup |
+| GPU | **Vulkan 1.3** driver (NVIDIA GTX 900 series, AMD RX 400 series, Intel Arc or newer), up to date |
+| RAM | 8 GB (16 GB recommended for the one-time game code build) |
+| Disk | about 8 GB free (a copy of the game files plus the game code built from them) |
+| Game | your own extracted *Pokémon: Let's Go, Eevee!* **v1.0.0** (base game, no update) |
 
-O passo a passo completo, do zero até o jogo aberto, está em **[docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md)**.
-Em resumo:
+Tested on Windows 11 with an Intel Core i5-14600KF, 32 GB of RAM and an NVIDIA GeForce RTX 3080. Other GPUs and vendors have not been tested yet: reports are
+welcome.
 
-1. `powershell -ExecutionPolicy Bypass -File tools\setup_windows.ps1` (uma vez: MSYS2, clang, SDL3, FFmpeg, Vulkan,
-   Python).
-2. Coloque os **seus** arquivos do jogo em `extracted/` (`exefs/` e `romfs.bin`).
-3. No Git Bash com o MSYS2 no PATH: `make gen`, `make -j20` e `make jogo`.
-4. Dê dois cliques em `jogar.bat`.
+## How to play
 
-Requisitos: Windows 10/11 x64, CPU com AVX2, GPU com Vulkan 1.3, uns 10 GB livres.
+1. Download the latest `LetsGoRecomp-<version>-windows.zip` from the [Releases](../../releases) page.
+2. Unzip it into a folder you can write to (for example `D:\Games\LetsGoRecomp`; not inside `Program Files`).
+3. Open **`LetsGoRecomp.exe`**.
+4. Click **Select game folder...** and choose the folder with your extracted game: the one holding `exefs` and
+   `romfs` (a `romfs.bin` image works too), or any folder above it.
+5. The launcher checks the files are *Let's Go, Eevee!* v1.0.0, copies them and **recompiles the game code for your
+   PC**. This happens only once and takes a while: about 16 minutes on a 20-thread Core i5-14600K, longer on
+   CPUs with fewer threads. A progress bar shows how far it got.
+6. Click **Play**.
 
-### Controles
+![The launcher](docs/launcher.png)
 
-| Ação | Teclado | Mouse | Controle |
+Everything stays inside that folder: settings (`larecomp.ini`), saves (`save\`), the game files (`extracted\`),
+translations (`mods\`), shader caches (`cache\`) and the log (`lasrecomp.log`). To back up or move the game, copy the
+folder. Nothing is written to the registry or to your user profile.
+
+## Features
+
+- **Native code:** the game's code runs compiled for your CPU, not interpreted or emulated.
+- **Image quality:**
+  - internal resolution from 720p to 4K, including above your screen's (supersampling, scaled down with a
+    high-quality filter);
+  - SMAA anti-aliasing (the game has none) and 16x anisotropic filtering;
+  - any window size or aspect ratio, and fullscreen.
+- **No shader stutter:** the game's GPU shaders are translated in parallel and cached on disk (SPIR-V and Vulkan
+  pipeline caches), and objects wait for their shader instead of popping in.
+- **Simple launcher:** pick the game folder once, then resolution, fullscreen, anti-aliasing, translation and key
+  bindings. In English, or in Brazilian Portuguese when Windows is.
+- **Keyboard and mouse:** all keys can be rebound in the launcher. The mouse aims Poké Balls like the Switch's motion
+  controls and acts as your finger on the touch screen.
+- **Controllers:** any controller SDL 3 recognizes (Xbox, PlayStation, Switch Pro, 8BitDo...), with the handheld-mode
+  layout. Play with Eevee works with a controller alone (the right stick moves a virtual finger).
+- **Translations and mods:** Atmosphere-style LayeredFS mods, installed from the downloaded file with one click.
+
+## Controls
+
+The game runs in handheld mode (one player).
+
+| Action | Keyboard (default) | Mouse | Controller |
 |---|---|---|---|
-| Andar / mirar | WASD | — | analógico esquerdo |
-| A: confirmar, falar, arremessar | Espaço ou Enter | esquerdo (na mira) | A |
-| B: cancelar | Q ou Backspace | direito | B |
-| X: menu | Tab | — | X |
-| Y: opções, caixa | R | — | Y |
-| L / R | Z / C | — | L / R |
-| + parceiro / − Pokédex | `=` / `-` | — | + / − |
-| Mirar a Poké Ball | WASD | movimento (depois do "Get ready") | analógico esquerdo |
-| Tela de toque (Brincar com Eevee) | — | esquerdo segurado | analógico direito + ZR |
-| Fechar o jogo | Esc | — | − e + juntos |
+| Walk / aim | WASD | | left stick |
+| A: confirm, talk, throw | Space or Enter | left button (while aiming) | A |
+| B: back | Q or Backspace | right button | B |
+| X: menu | Tab | | X |
+| Y: options, box | R | | Y |
+| L / R | Z / C | | L / R |
+| + partner / − Pokédex | `=` / `-` | | + / − |
+| D-pad | arrow keys | | D-pad |
+| Aim a Poké Ball | WASD | move (after "Get ready") | left stick |
+| Touch screen (Play with Eevee) | | hold the left button | right stick + hold ZR |
+| Close the game | Esc | | − and + together |
 
-### Traduções
+While you aim a Poké Ball the mouse is captured by the window; outside of aiming it is free. Mouse sensitivity is
+set in the launcher.
 
-Coloque a tradução em `mods/<nome>/`: o conteúdo de `atmosphere/contents/0100187003A36000/romfs` (ou o pacote
-inteiro, a pasta do Eevee é achada sozinha). Ela aparece em "Tradução" no launcher. Detalhes em
-[docs/PROGRESSO.md](docs/PROGRESSO.md).
+## Translations and mods
 
-## Documentação
-- [docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md): passo a passo para compilar e jogar
-- [docs/PROGRESSO.md](docs/PROGRESSO.md): o que funciona e o que falta
-- [docs/HISTORICO.md](docs/HISTORICO.md): cada problema encontrado, a causa e a correção
-- [docs/DEPURACAO.md](docs/DEPURACAO.md): ferramentas e variáveis de diagnóstico
-- [docs/DIAGNOSTICO.md](docs/DIAGNOSTICO.md): módulos do jogo e cobertura do tradutor
-- [docs/MODO-BATALHA.md](docs/MODO-BATALHA.md): modo de batalha contra Pokémon selvagens (em andamento)
-- [docs/PLANO-3D.md](docs/PLANO-3D.md), [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md),
-  [docs/ANALISE-LASRecomp.md](docs/ANALISE-LASRecomp.md): investigações anteriores
-- [CONTRIBUTING.md](CONTRIBUTING.md): como reportar problemas e contribuir
+The game has no Portuguese (or any other fan) translation of its own; fan translations are distributed as
+Atmosphere LayeredFS packs, and those work as they are:
 
-## Créditos
-- **[LAS Recomp](https://github.com/peiikai/LASRecomp)** por Peiikai: o recompilador e o runtime em que este projeto
-  se baseia (licença MIT, [LICENSE-LASRecomp](LICENSE-LASRecomp)).
-- **Pokémon Switch Brasil** (Derek e equipe): a tradução PT-BR de fãs com que o suporte a mods foi testado. Ela não
-  está incluída; é distribuída pelo próprio grupo.
-- **Bibliotecas e ferramentas:**
-  - [SDL 3](https://libsdl.org) (zlib): janela, entrada, áudio;
-  - [FFmpeg](https://ffmpeg.org) (LGPL/GPL, ligado dinamicamente): vídeos;
-  - [Dear ImGui](https://github.com/ocornut/imgui) (MIT): launcher e menu;
+1. Click **Install a translation...** in the launcher.
+2. Pick the file you downloaded (`.zip`, `.rar` or `.7z`, as it came), and the launcher unpacks it and finds the
+   `romfs` folder for *Let's Go, Eevee!* (title id `0100187003A36000`) inside it. Packs made for both games are fine.
+3. Choose it under **Translation**. "None (English)" goes back to the original game.
+
+Installed mods live in `mods\<name>\romfs\`; you can also copy a `romfs` folder there by hand. Files in it replace
+the game's files with the same path, and new files are added. When a translation replaces one language's texts, the
+game is told to use that language automatically.
+
+Tested with the Brazilian Portuguese fan translation by **Pokémon Switch Brasil** (see [Português](#português)).
+It is not included in this repository or in the releases; it is distributed by its authors.
+
+## What was tested
+
+Tested by playing on Windows 11, RTX 3080, 1920x1080 monitor, with keyboard and mouse and with a controller, plus
+scripted input runs (recorded inputs replayed frame by frame, see [docs/DEPURACAO.md](docs/DEPURACAO.md)):
+
+| Area | Result |
+|---|---|
+| Boot, opening movie (video and audio) | ✅ works, 1080p video, ends and goes to the title screen |
+| New game: language, Professor Oak, character choice, name entry | ✅ |
+| Your room, Pallet Town, Route 1, Viridian City (3D, characters, Pokémon) | ✅ correct, including skinned models |
+| Wild Pokémon capture (aiming with stick, mouse and the virtual motion sensor) | ✅ |
+| Trainer battle (Route 1) | ✅ |
+| Menus, bag, Pokédex, party, box, Pokémon icons | ✅ |
+| Play with Eevee: petting, opening the berry tray, feeding | ✅ with mouse and with controller only |
+| Save and load | ✅ (`save\save_0\savedata.bin`) |
+| Music and sound effects | ✅ no crackling or underruns in a 4-minute measured run |
+| Release zip on a clean folder, without any development tools on PATH: game setup, recompiling, playing, installing the translation from the downloaded `.rar` | ✅ |
+| Frame rate | ✅ stable 30 fps (minimum 28.6 over 2 s windows, 4 minutes on Route 1) |
+| Resolutions 720p, 1080p, 1440p, 4K; windowed, resized, fullscreen | ✅ (4K renders at ~78 fps uncapped on an RTX 3080) |
+| PT-BR fan translation (texts, menus, translated images) | ✅ |
+| Keyboard rebinding; playing with a controller | ✅ |
+
+**Not tested yet:** the rest of the story past Viridian City (gyms, other cities and caves, the Elite Four), every
+move animation and every Pokémon, AMD and Intel GPUs, laptops, other Windows versions, Steam Deck / Linux.
+
+## Known issues and limitations
+
+- **Only *Let's Go, Eevee!* v1.0.0.** Updates (v1.0.1, v1.0.2) are not supported. *Let's Go, Pikachu!* uses a
+  different executable and is not supported yet.
+- **Windows only.** The Linux code path comes from LAS Recomp and builds in principle, but has never been tested
+  with this game.
+- **30 fps, not 60.** The game advances its logic one step per frame, so running it at 60 fps makes everything run
+  at double speed. A real 60 fps mode would need frame interpolation; the research is in
+  [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md) (Portuguese).
+- **First visit to an area:** the first time a new object appears on your PC it can show up a frame or two late
+  while its shader is prepared. From then on the cache on disk covers it.
+- **Motion controls:** the gyro of controllers that have one (DualSense, Pro Controller) is not used yet; aim with
+  the stick or the mouse.
+- **Online features are off:** Pokémon GO / GO Park transfers, trades, online battles, the Poké Ball Plus and
+  local wireless play.
+- **No co-op:** the second player (shared play) is not supported.
+- **System font:** a few texts use the Switch's built-in font, which is not part of the game files; Windows'
+  Yu Gothic stands in for it. A copy dumped from your own console can be placed in `fonts\`
+  ([fonts/README.md](fonts/README.md)).
+- Long sessions have been stable in testing, but the game has not been played to the end: please report crashes
+  with the `lasrecomp.log` file (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+## How it works
+
+The Switch runs ARM64 code; a PC runs x86-64. Instead of emulating the Switch's CPU, the game's code is translated
+ahead of time:
+
+1. **Recompiler** (`tools/gen.py`, from LAS Recomp): reads the game's four executable modules (`main`, `sdk`,
+   `subsdk0`, `subsdk1`), finds every function, and turns each ARM64 instruction into equivalent C code (with AVX2
+   for the NEON / floating-point instructions). The result is about 920 C files.
+2. **Compiler:** that C code is compiled into `lasgame.dll`, the game code library. In the release this happens on
+   your PC, from your own files, with a bundled compiler ([Zig](https://ziglang.org) / clang); no game code is ever
+   distributed.
+3. **Runtime** (`LetsGoRecomp.exe`): loads the game code and provides everything the game expects from the Switch:
+   - a kernel (threads, synchronization, memory) and the system services (file system, settings, time, audio,
+     controllers, touch screen, video decoding, offline stubs for network services);
+   - the **NVN** graphics API implemented on **Vulkan**, with the Switch GPU's (Maxwell) shaders translated to
+     SPIR-V at run time;
+   - high-level replacements (HLE) for a few SDK functions, such as the movie player and the software keyboard.
+
+The original game files stay untouched; translations are applied as file replacements when the game reads them
+(LayeredFS). The full story of the port, with every problem found and how it was solved, is in
+[docs/HISTORICO.md](docs/HISTORICO.md) (Portuguese).
+
+## Building from source
+
+You only need this to work on the project; to play, use the [release](#how-to-play).
+
+Requirements: Windows 10/11 x64, [MSYS2](https://www.msys2.org) (UCRT64: clang, make, SDL3, FFmpeg, shaderc,
+Vulkan headers), Python 3.12 with `capstone`, `unicorn` and `lz4`. `tools/setup_windows.ps1` installs all of it.
+
+```bash
+export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"   # Git Bash, or use the MSYS2 UCRT64 shell
+make -j20 build/lasrecomp.exe   # the runtime
+./build/lasrecomp.exe           # the launcher: select your game folder, it builds the game code (.venv + clang)
+```
+
+Or by hand, with your files in `extracted/` (`exefs/` and `romfs.bin`):
+
+```bash
+make gen                        # translate the game code into generated/
+make -j20 build/lasgame.dll     # compile it (always with -j: ~920 files)
+./build/lasrecomp.exe extracted --play
+```
+
+The release zip: `make deps-windows` (an LGPL-only FFmpeg with just the decoders the game needs), `make gen-helper`
+(the generator frozen with PyInstaller), `tools/fetch_zig.sh` (the pinned Zig compiler), then `make dist`.
+
+Step by step, from a clean PC: [docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md) (Portuguese; the commands are
+the same). Debugging tools and environment variables: [docs/DEPURACAO.md](docs/DEPURACAO.md).
+
+## FAQ
+
+**Is this an emulator?** No. There is no CPU emulation: the game's code was converted to native x86-64 code. The
+runtime implements the Switch's system services, a bit like Wine does for Windows programs.
+
+**Why does it compile the game on my PC?** The game code generated from the game's files is still Nintendo's code,
+so it cannot be distributed. The release ships the tools instead, and builds it from your own copy.
+
+**Can I use my save from the Switch?** Saves are stored as `save\save_0\savedata.bin`, in the same format as the
+game's own save data. Save transfer has not been tested.
+
+**Does it work with Let's Go, Pikachu!?** Not yet. Its executable differs from Eevee's, so the recompiler's
+per-game data has to be redone for it.
+
+**Can I use an updated game (v1.0.1 / v1.0.2)?** No, only the base v1.0.0. The launcher checks this.
+
+**The launcher says the files are packed (.xci / .nsp).** Extract the game's `exefs` and `romfs` first, with your
+usual tool, from your own dump.
+
+**Where is the log?** `lasrecomp.log`, next to the exe.
+
+## Documentation
+
+Most internal documentation is in Portuguese.
+- [docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md): building from source, step by step
+- [docs/PROGRESSO.md](docs/PROGRESSO.md): what works and what is missing
+- [docs/HISTORICO.md](docs/HISTORICO.md): every problem found, its cause and fix
+- [docs/DEPURACAO.md](docs/DEPURACAO.md): debugging tools and environment variables
+- [docs/DIAGNOSTICO.md](docs/DIAGNOSTICO.md): the game's modules and translator coverage
+- [docs/MODO-BATALHA.md](docs/MODO-BATALHA.md): experimental classic battles against wild Pokémon (in progress)
+- [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md): research on 60 fps
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to report problems and contribute
+
+## Credits
+
+- **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by **Peiikai**: the static recompiler and the runtime this
+  project is built on (MIT, [LICENSE-LASRecomp](LICENSE-LASRecomp)). Without it this port would not exist.
+- **Pokémon Switch Brasil** (Derek and team): the Brazilian Portuguese fan translation used to test translation
+  support. Not included; distributed by the group.
+- **Libraries and tools:**
+  - [SDL 3](https://libsdl.org) (zlib): window, input, audio;
+  - [FFmpeg](https://ffmpeg.org) (LGPL 2.1, dynamically linked): the game's movies and Opus audio;
+  - [Dear ImGui](https://github.com/ocornut/imgui) (MIT): launcher and in-game dialogs;
   - [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) (MIT);
-  - [shaderc](https://github.com/google/shaderc) (Apache 2.0);
+  - [shaderc](https://github.com/google/shaderc) (Apache 2.0): GLSL to SPIR-V;
   - [SMAA](https://github.com/iryoku/smaa) (MIT, `third_party/smaa/LICENSE.txt`);
-  - [AMD FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT);
-  - a fonte [Baloo 2](https://github.com/EkType/Baloo2) (SIL OFL 1.1, `third_party/fonts/Baloo2/OFL.txt`);
-  - [Capstone](https://www.capstone-engine.org), [Unicorn](https://www.unicorn-engine.org) e
-    [python-lz4](https://github.com/python-lz4/python-lz4) no gerador de código.
-- A documentação da comunidade homebrew do Switch ([Switchbrew](https://switchbrew.org)) e do
-  [envytools](https://github.com/envytools/envytools) (GPUs NVIDIA).
+  - [AMD FidelityFX FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT): upscaling;
+  - the [Baloo 2](https://github.com/EkType/Baloo2) font (SIL OFL 1.1, `third_party/fonts/Baloo2/OFL.txt`);
+  - [Capstone](https://www.capstone-engine.org), [Unicorn](https://www.unicorn-engine.org) and
+    [python-lz4](https://github.com/python-lz4/python-lz4) in the recompiler; [PyInstaller](https://pyinstaller.org)
+    and [Zig](https://ziglang.org) (MIT) in the release.
+- The Switch homebrew community's documentation ([Switchbrew](https://switchbrew.org)) and
+  [envytools](https://github.com/envytools/envytools) (NVIDIA GPUs).
 
-## Aviso legal
-Este é um projeto de fã, sem afiliação, apoio ou patrocínio da Nintendo, The Pokémon Company, Game Freak ou Creatures.
-*Pokémon* e *Pokémon: Let's Go, Eevee!* são marcas dos seus donos. Nenhum arquivo, código, imagem, texto, música ou
-fonte do jogo está incluído. Para jogar, você precisa fornecer a sua própria cópia, obtida legalmente.
+## Legal
 
-## Licença
-O código deste repositório (o recompilador, o runtime e as ferramentas) está sob a [licença MIT](LICENSE), assim como
-o LAS Recomp em que se baseia. Os componentes de terceiros mantêm as suas licenças (listadas em Créditos). A licença
-cobre só este código e não dá nenhum direito sobre o jogo.
+This is a fan project with no affiliation with, endorsement or sponsorship by Nintendo, The Pokémon Company, Game
+Freak or Creatures. *Pokémon* and *Pokémon: Let's Go, Eevee!* are trademarks of their respective owners. No game
+files, code, graphics, text, music or fonts are included. To play, you must provide your own legally obtained copy.
 
-## In English
+## License
 
-**Let's Go Recomp** is a static recompilation of *Pokémon: Let's Go, Eevee!* (Nintendo Switch, v1.0.0) into a native
-Windows application, built on the [LAS Recomp](https://github.com/peiikai/LASRecomp) runtime. **No game files are included**: you
-need your own legally obtained copy of the extracted v1.0.0 game files; this repository does not explain how to get
-them.
+The code in this repository (the recompiler, the runtime and the tools) is under the [MIT license](LICENSE), like
+LAS Recomp it is built on. Third-party components keep their own licenses (see [Credits](#credits)). The license
+covers this code only and grants no rights to the game.
 
-It runs at a stable 30 fps (the game's own rate) from 720p to 4K, with SMAA, 16x anisotropic filtering, a
-simple launcher, keyboard / mouse / controller support (the mouse aims Poké Balls like the Switch's gyro and acts as
-a finger on the touch screen), and Atmosphere-style mods (fan translations). Build steps:
-[docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md) (Portuguese; the commands speak for themselves). MIT licensed.
-Not affiliated with Nintendo, The Pokémon Company or Game Freak.
+---
+
+## Português
+
+**Let's Go Recomp** é um port nativo para Windows do *Pokémon: Let's Go, Eevee!* (Switch, v1.0.0) feito por
+recompilação estática, baseado no [LAS Recomp](https://github.com/peiikai/LASRecomp). **Nenhum arquivo do jogo vem
+junto:** você precisa da sua própria cópia, obtida legalmente, extraída (pastas `exefs` e `romfs`).
+
+**Como jogar:** baixe o zip em [Releases](../../releases), descompacte numa pasta sua, abra o `LetsGoRecomp.exe`,
+clique em **Selecionar pasta do jogo...** e escolha a pasta com o jogo extraído. O programa copia os arquivos e
+recompila o código do jogo para o seu PC (só uma vez; uns 16 minutos num i5-14600K, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
+abre em português quando o Windows está em português.
+
+### Jogar em português (tradução PT-BR)
+
+O jogo não tem português. A tradução de fãs do grupo **Pokémon Switch Brasil** funciona sem nenhuma modificação:
+
+1. Baixe a tradução PT-BR do Let's Go no canal oficial do grupo Pokémon Switch Brasil (o arquivo `.rar` ou `.zip`,
+   do jeito que vier).
+2. No launcher, clique em **Instalar tradução...** e escolha o arquivo baixado. Não precisa descompactar: o
+   programa abre o arquivo e acha sozinho a pasta do Let's Go Eevee (`0100187003A36000`), mesmo em pacotes que
+   trazem os dois jogos.
+3. Em **Tradução**, escolha a tradução instalada e clique em **Jogar**. Para voltar ao inglês, escolha
+   "Nenhuma (inglês)".
+
+Textos, menus e as imagens traduzidas aparecem em português, e o jogo é configurado sozinho para o idioma que a
+tradução substitui. A tradução **não está incluída** neste repositório nem nas releases: ela é distribuída pelos
+seus autores, a quem vão todos os créditos. Testada com a versão 3.1 da tradução.
+
+A documentação interna do projeto (histórico de cada correção, depuração, compilação) está em português, na pasta
+[docs/](docs).

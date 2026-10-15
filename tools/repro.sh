@@ -8,7 +8,7 @@
 #
 # Exemplo:  tools/repro.sh base 1300,1400
 #           tools/repro.sh paleta 1300,1400 LARECOMP_VK_SKIN_IDENTITY=1
-#           EXE=./build/jogo/lasrecomp.exe tools/repro.sh jogo 1400   (a cópia do jogar.bat)
+#           EXE=./build/jogo/lasrecomp.exe tools/repro.sh jogo 1400   (a cópia de make jogo)
 #           RENDERDOC=1 tools/repro.sh rdc 1300 LARECOMP_RENDERDOC_AT=1290   (captura em build/rdc/)
 #           SAVE="$HOME/Downloads/savedata.bin" tools/repro.sh outro 1400   (outro save, copiado)
 set -euo pipefail

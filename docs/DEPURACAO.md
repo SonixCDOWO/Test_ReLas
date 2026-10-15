@@ -107,8 +107,8 @@ fica em cache em `build/xrefs-main.pkl`. Chamadas por vtable não aparecem: para
 de execução (frame pointers do guest, `x29`) é o caminho.
 
 ### Jogar enquanto se testa
-`jogar.bat` roda a cópia estável em `build/jogo/`. `tools/publicar_jogo.sh` (com o jogo fechado) copia o build atual
-para lá depois de validado. Assim, recompilar e testar em `build/` não esbarra no executável travado pelo jogo aberto.
+`build/jogo/lasrecomp.exe` (dois cliques) é a cópia estável. `make jogo` (`tools/publicar_jogo.sh`, com o jogo
+fechado) copia o build atual para lá depois de validado. Assim, recompilar e testar em `build/` não esbarra no executável travado pelo jogo aberto.
 
 ## Vídeo e áudio
 | Variável | Efeito |
