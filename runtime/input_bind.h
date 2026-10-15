@@ -28,6 +28,7 @@ enum { PADB_LTRIGGER = 26 /* SDL_GAMEPAD_BUTTON_COUNT */, PADB_RTRIGGER, PADB_HO
 
 extern int16_t g_bind_pad[BIND_PAD_COUNT];  // PADB value per Switch button
 extern int16_t g_bind_key[BIND_KEY_COUNT];  // SDL_Scancode per input (0 = none)
+extern const int16_t g_bind_key2[BIND_PAD_COUNT];  // fixed second keys (Enter = A, Backspace = B)
 
 const char *bind_input_name(int slot);         // "A", "D-pad Up", "Left stick Up"
 const char *bind_pad_label(int host, int fam); // controller button in the pad family's own words (fam: input_pad_family)

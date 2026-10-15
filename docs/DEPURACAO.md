@@ -11,6 +11,9 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_FPS=<n>` | força n fps (padrão: o intervalo do jogo, 30 fps; `0` = sem limite) |
 | `LARECOMP_NO_AUDIO=1` | sem áudio (testes automáticos) |
 | `LARECOMP_SWKBD_UTF8=1` | teclado devolve UTF-8 (comportamento do Zelda) |
+| `LARECOMP_GYRO_TEST=x\|y\|z` | giroscópio virtual oscilando ±15° no eixo dado (`z+` / `x-`...: giro de 10° em rampa 1 s depois do início da mira); loga quando o jogo lê o sensor. Para chegar a uma captura: andar pela grama (`STICK_*`) e apertar A no "Get ready"; o encontro é sorteado, repita até o log ter `sensor started` |
+| `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
+| `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |
 
 ## Travamentos e crashes
 | Ferramenta | Uso |

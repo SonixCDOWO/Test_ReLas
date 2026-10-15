@@ -10,6 +10,7 @@ _Atualizado em 15/10/2026._
 |---|---|
 | Boot | completo: 4 módulos, SDK, construtores, threads, serviços do sistema |
 | Controle | gamepad do PC como modo portátil (seleção de controle aceita) |
+| Teclado e mouse | WASD anda / mira, Espaço ou Enter = A, Q ou Backspace = B, Tab = X (menu), R = Y, Z / C = L / R, `=` / `-` = Plus / Minus, setas = d-pad. Mouse: clique na janela para prendê-lo; clique esquerdo = A, direito = B, movimento = mira da Poké Ball (giroscópio virtual). Esc solta o mouse (pergunta se quer fechar) |
 | Vídeo de abertura | imagem e áudio corretos, 1080p, termina e segue para o jogo |
 | Áudio | música e efeitos (Opus via `hwopus`), áudio dos vídeos sem cortes |
 | Ritmo | travado em 30 fps (nativo do jogo) |
@@ -22,8 +23,8 @@ _Atualizado em 15/10/2026._
 ## O que falta
 1. **Validar o 3D em mais cenas** (batalhas, Pokémon grandes, cidades): a correção dos modelos com esqueleto foi
    validada na Pallet Town. Histórico em [HISTORICO.md, parte 6](HISTORICO.md#parte-6-personagens-explodidos-resolvido).
-2. **Mira por movimento**: o sensor responde sempre "parado". Opção futura: mirar com o analógico direito ou com
-   o giroscópio do controle.
+2. **Mira por movimento**: feita com o mouse (giroscópio virtual). Falta: giroscópio de controles que têm sensor
+   (DualSense, Pro Controller) e uma opção de sensibilidade no launcher (hoje `mouse_sens` no `larecomp.ini`).
 3. **Recursos online** (Pokémon GO, trocas, Poké Ball Plus): desligados de propósito (serviços offline).
 4. **Desempenho** (medido em 15/10/2026, `tools/perf_summary.py` sobre 4 min andando pela Rota 1): 30 fps estáveis
    (mínimo 28,6 por janela de 2 s, nenhum quadro acima de 50 ms fora o print do teste, nenhum underrun de áudio) numa
@@ -65,7 +66,7 @@ _Atualizado em 15/10/2026._
 | Serviços | Bluetooth offline (`btm:u`, `bt`), `csrng`, `hwopus` | `runtime/services/offline.c`, `hwopus.c` |
 | Vídeo | buffers do jogo no `GetOutputBuffer`, slots em rodízio, `FindInt64`/`SetCoreMask`, fim de stream `0x2000`, alocador do jogo | `runtime/hle/movie.c` |
 | `vi` | `SetLayerScalingMode` | `runtime/hle/vi.c` |
-| Controle | modo portátil, estilos suportados pelo jogo, sensor de movimento neutro | `runtime/hle/input.c`, `services/hid_set.c` |
+| Controle | modo portátil, estilos suportados pelo jogo, teclado / mouse, giroscópio virtual movido pelo mouse | `runtime/hle/input.c`, `runtime/hle/bindings.c`, `services/hid_set.c` |
 | Teclado | nome em UTF-16 | `runtime/hle/swkbd.c` |
 | NVN | programas por estágio, programas só com vertex shader, pacing pelo present interval | `runtime/nvn/cmdbuf.c`, `objects.c`, `vulkan/exec.c` |
 | Tradutor de shaders | `LDC.64` cujo registrador de endereço também é destino (modelos com esqueleto) | `runtime/nvn/maxwell/translate.c` |

@@ -11,21 +11,24 @@
 _Static_assert(PADB_LTRIGGER == SDL_GAMEPAD_BUTTON_COUNT, "trigger pseudo-buttons follow SDL's buttons");
 
 // Defaults: Nintendo layout by position (east = A, south = B, north = X, west = Y), triggers = ZL / ZR;
-// keyboard WASD left stick, arrows d-pad, K/J/L/I = A/B/X/Y, Q/E = L/R, 1/3 = ZL/ZR, Enter / Backspace = Plus /
-// Minus, F / numpad 0 = stick clicks, numpad 8/5/4/6 right stick.
+// keyboard (Let's Go: A confirms / talks / throws, B cancels, X main menu, Y options / box, L / R move Pokemon and
+// items, Plus / Minus buddy / Pokedex) WASD left stick, arrows d-pad, Space = A, Q = B, Tab = X, R = Y, Z / C = L / R,
+// 1 / 3 = ZL / ZR, = / - = Plus / Minus, F / numpad 0 = stick clicks, numpad 8/5/4/6 right stick; second keys
+// (fixed): Enter = A, Backspace = B.
 #define DEF_PAD { \
     SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_NORTH, SDL_GAMEPAD_BUTTON_WEST, \
     SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_BUTTON_RIGHT_STICK, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, \
     SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, PADB_LTRIGGER, PADB_RTRIGGER, SDL_GAMEPAD_BUTTON_START, SDL_GAMEPAD_BUTTON_BACK, \
     SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_DOWN}
 #define DEF_KEY { \
-    SDL_SCANCODE_K, SDL_SCANCODE_J, SDL_SCANCODE_L, SDL_SCANCODE_I, SDL_SCANCODE_F, SDL_SCANCODE_KP_0, \
-    SDL_SCANCODE_Q, SDL_SCANCODE_E, SDL_SCANCODE_1, SDL_SCANCODE_3, SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE, \
+    SDL_SCANCODE_SPACE, SDL_SCANCODE_Q, SDL_SCANCODE_TAB, SDL_SCANCODE_R, SDL_SCANCODE_F, SDL_SCANCODE_KP_0, \
+    SDL_SCANCODE_Z, SDL_SCANCODE_C, SDL_SCANCODE_1, SDL_SCANCODE_3, SDL_SCANCODE_EQUALS, SDL_SCANCODE_MINUS, \
     SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN, \
     SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D, SDL_SCANCODE_KP_8, SDL_SCANCODE_KP_5, \
     SDL_SCANCODE_KP_4, SDL_SCANCODE_KP_6}
 static const int16_t k_def_pad[BIND_PAD_COUNT] = DEF_PAD, k_def_key[BIND_KEY_COUNT] = DEF_KEY;
 int16_t g_bind_pad[BIND_PAD_COUNT] = DEF_PAD, g_bind_key[BIND_KEY_COUNT] = DEF_KEY;
+const int16_t g_bind_key2[BIND_PAD_COUNT] = {SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE};
 
 static const char *const k_ini[BIND_KEY_COUNT] = {
     "a", "b", "x", "y", "lstick", "rstick", "l", "r", "zl", "zr", "plus", "minus", "left", "up", "right", "down",

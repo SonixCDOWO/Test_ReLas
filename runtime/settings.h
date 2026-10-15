@@ -23,6 +23,7 @@ typedef struct {
     int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (MetalFX: macOS, FSR 1: Windows)
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
+    float mouse_sens;    // mouse aim (the virtual gyro, runtime/hle/input.c): degrees per pixel
     bool reverb;         // room reverb effect
     bool movie_audio;
     bool show_fps;

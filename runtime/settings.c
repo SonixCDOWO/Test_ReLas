@@ -20,6 +20,7 @@ Settings g_settings = {
     .aspect = ASPECT_UNLOCKED,
     .fullscreen = false,
     .volume = 1.0f,
+    .mouse_sens = 0.1f,
     .reverb = true,
     .movie_audio = true,
     .show_fps = false,
@@ -52,6 +53,7 @@ void settings_load(void) {
         else if (!strcmp(key, "fullscreen")) g_settings.fullscreen = atoi(val) != 0;
         else if (!strcmp(key, "render_height")) g_settings.res_height = atoi(val) >= 360 && atoi(val) <= 4320 ? atoi(val) : 0;
         else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
+        else if (!strcmp(key, "mouse_sens")) g_settings.mouse_sens = (float)atof(val);
         else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
         else if (!strcmp(key, "movie_audio")) g_settings.movie_audio = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
@@ -104,6 +106,7 @@ void settings_save(void) {
     fprintf(f, "fullscreen = %d\n", g_settings.fullscreen);
     fprintf(f, "render_height = %d\n", g_settings.res_height);
     fprintf(f, "volume = %.2f\n", g_settings.volume);
+    fprintf(f, "mouse_sens = %.3f\n", g_settings.mouse_sens);
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);

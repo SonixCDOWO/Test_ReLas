@@ -1,8 +1,10 @@
 // Controller input: SDL keyboard/gamepad -> nn::hid Npad state.
 //
 // Both go through the player's bindings (runtime/hle/bindings.c, defaults there: keyboard WASD left stick, arrows
-// d-pad, K/J/L/I = A/B/X/Y, Q/E = L/R, 1/3 = ZL/ZR, Enter / Backspace = Plus / Minus, numpad 8/4/5/6 right stick;
-// controller by position, Switch A = east).
+// d-pad, Space (or Enter) = A, Q (or Backspace) = B, Tab = X, R = Y, Z / C = L / R, 1 / 3 = ZL / ZR, = / - = Plus /
+// Minus, numpad 8/4/5/6 right stick; controller by position, Switch A = east).
+// Mouse: a click in the window takes it (relative mode); then left / right click = A / B and moving it turns the
+// virtual gyro (the Poke Ball aim). The menu (Esc) or leaving the window lets it go.
 #include <SDL3/SDL.h>
 #include <ctype.h>
 #include <math.h>
@@ -23,7 +25,7 @@ enum {
 
 _Static_assert(BTN_DOWN == BIND_DOWN && BTN_ZL == BIND_ZL, "bindings follow the button bits");
 
-static _Atomic uint64_t key_buttons, pad_buttons;
+static _Atomic uint64_t key_buttons, pad_buttons, mouse_buttons;
 static _Atomic int32_t key_lx, key_ly, key_rx, key_ry, pad_lx, pad_ly, pad_rx, pad_ry;
 static uint8_t keys_down[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;
@@ -37,11 +39,12 @@ static bool host_test;  // (then a real controller is left out: the player's own
 
 static int held_key(int sc) { return sc > 0 && sc < SDL_SCANCODE_COUNT && (keys_down[sc] || test_keys[sc]); }
 
-// Through the bindings (runtime/hle/bindings.c: g_bind_key), read on every key event, so a rebind applies at once.
+// Through the bindings (runtime/hle/bindings.c: g_bind_key, and the fixed second keys), read on every key event, so
+// a rebind applies at once.
 static void recompute_keyboard(void) {
     uint64_t b = 0;
     for (int i = 0; i < BIND_PAD_COUNT; i++)
-        if (held_key(g_bind_key[i])) b |= 1ull << i;
+        if (held_key(g_bind_key[i]) || held_key(g_bind_key2[i])) b |= 1ull << i;
     key_buttons = b;
     key_lx = (held_key(g_bind_key[BIND_LS_RIGHT]) - held_key(g_bind_key[BIND_LS_LEFT])) * 32767;
     key_ly = (held_key(g_bind_key[BIND_LS_UP]) - held_key(g_bind_key[BIND_LS_DOWN])) * 32767;
@@ -76,10 +79,20 @@ static void recompute_pad(void) {
     pad_ry = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
 }
 
-// Forget held keys (the menu took focus); the gamepad is re-read on its next event.
+// The mouse: held by the game window (relative mode) or free
+static SDL_Window *mouse_win;
+static _Atomic int64_t mouse_acc_x, mouse_acc_y;  // motion not yet applied to the virtual gyro, in 1/1000 pixel
+static void mouse_release(void) {
+    if (mouse_win) SDL_SetWindowRelativeMouseMode(mouse_win, false);
+    mouse_win = NULL;
+    mouse_buttons = 0;
+}
+
+// Forget held keys (the menu took focus) and let the mouse go; the gamepad is re-read on its next event.
 void input_reset(void) {
     memset(keys_down, 0, sizeof keys_down);
     recompute_keyboard();
+    mouse_release();
 }
 
 volatile int g_debug_frame_request;  // F9: dump the next frame's passes (build/pass_*.png) + draw log
@@ -157,6 +170,26 @@ void input_handle_event(const SDL_Event *e) {
         if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_F9 && !e->key.repeat) g_debug_frame_request = 1;
         if (e->key.scancode < SDL_SCANCODE_COUNT) keys_down[e->key.scancode] = e->type == SDL_EVENT_KEY_DOWN;
         recompute_keyboard();
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: {
+        bool down = e->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        if (!mouse_win) {  // the first click only takes the mouse
+            if (down && e->button.button == SDL_BUTTON_LEFT && (mouse_win = SDL_GetWindowFromID(e->button.windowID)))
+                SDL_SetWindowRelativeMouseMode(mouse_win, true);
+            break;
+        }
+        int bit = e->button.button == SDL_BUTTON_LEFT ? BTN_A : e->button.button == SDL_BUTTON_RIGHT ? BTN_B : -1;
+        if (bit >= 0) mouse_buttons = down ? mouse_buttons | 1ull << bit : mouse_buttons & ~(1ull << bit);
+        break;
+    }
+    case SDL_EVENT_MOUSE_MOTION:
+        if (mouse_win) {
+            mouse_acc_x += (int64_t)(e->motion.xrel * 1000);
+            mouse_acc_y += (int64_t)(e->motion.yrel * 1000);
+        }
+        break;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        mouse_release();
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         if (!pad) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
@@ -374,7 +407,7 @@ void input_frame(uint64_t frame) {
 extern bool menu_input_captured(void);  // runtime/ui/menu.mm: overlay menu or name entry up (it has the keys / pad)
 
 // Buttons held right now (keyboard, gamepad, test script), independent of whether the game polls (movies).
-uint64_t input_buttons_now(void) { return (menu_input_captured() ? 0 : key_buttons | pad_buttons) | script_buttons; }
+uint64_t input_buttons_now(void) { return (menu_input_captured() ? 0 : key_buttons | pad_buttons | mouse_buttons) | script_buttons; }
 
 static int32_t clamp_axis(int32_t v) { return v > 32767 ? 32767 : v < -32767 ? -32767 : v; }
 
@@ -412,7 +445,7 @@ static void fill_state(Cpu *c) {
         LOG("[input] watching controller object %llx\n", c->x[1] - 8);
     }
     bool menu = menu_input_captured();  // the overlay menu / name entry has the controls (typing there isn't for the game)
-    uint64_t b = menu ? script_buttons : key_buttons | pad_buttons | script_buttons;
+    uint64_t b = menu ? script_buttons : key_buttons | pad_buttons | mouse_buttons | script_buttons;
     {   // injected Plus: held for ~10 presented frames (the game polls several times per frame)
         extern uint64_t renderer_present_count(void);
         static uint64_t until;
@@ -519,20 +552,74 @@ HLE_FUNC("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS
 
 // Vibration devices: accepted but inert (the SDK's vibration node graph stays recompiled).
 HLE_FUNC("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", hid_init_vibration) { (void)c; }
-// Six-axis (motion) sensor: a controller held still, level and facing forward. Let's Go aims Poke Ball throws with
-// the gyro in handheld mode; with no sensor behind it the SDK read garbage and the aim went into the sky. A neutral
-// orientation keeps the aim centred on the Pokemon (a throw goes straight). Motion input could come later.
-// SixAxisSensorState (0x60): +0 delta time ns, +8 sampling number, +0x10 acceleration, +0x1c angular velocity,
-// +0x28 angle, +0x34 direction (3x3: x, y, z axes), +0x58 attributes (bit 0 IsConnected).
+// Six-axis (motion) sensor. Let's Go aims Poke Ball throws with the gyro in handheld mode; with no sensor behind it
+// the SDK read garbage and the aim went into the sky. The rest pose is a controller lying level (identity orientation,
+// gravity -z), which keeps the aim centred. The mouse turns this virtual controller (yaw / pitch, input_handle_event
+// accumulates the motion), with every field consistent: orientation, angle, angular velocity and gravity.
+// SixAxisSensorState (0x60): +0 delta time ns, +8 sampling number, +0x10 acceleration (G), +0x1c angular velocity
+// (turns / s), +0x28 angle (turns), +0x34 direction (3x3: x, y, z axes), +0x58 attributes (bit 0 IsConnected).
+// LARECOMP_GYRO_TEST=x|y|z sweeps the yaw axis ±15 degrees (2 s period) to see which way the aim follows.
+static double gyro_yaw, gyro_pitch;               // radians
+static _Atomic uint64_t gyro_start_ns;            // when the game last started the sensor (aiming begins)
+static int gyro_yaw_axis = 2, gyro_pitch_axis = 0;
+static void mat_rot(double m[3][3], int axis, double a) {
+    int i = (axis + 1) % 3, j = (axis + 2) % 3;
+    memset(m, 0, 9 * sizeof(double));
+    m[axis][axis] = 1;
+    m[i][i] = cos(a); m[i][j] = -sin(a);
+    m[j][i] = sin(a); m[j][j] = cos(a);
+}
+static void mat_mul(double o[3][3], double a[3][3], double b[3][3]) {
+    for (int r = 0; r < 3; r++)
+        for (int k = 0; k < 3; k++) o[r][k] = a[r][0] * b[0][k] + a[r][1] * b[1][k] + a[r][2] * b[2][k];
+}
 static void six_axis_fill(uint8_t *s, int64_t sampling) {
+    static int test = -1, test_fixed;
+    if (test < 0) {
+        const char *e = getenv("LARECOMP_GYRO_TEST");
+        test = e && *e >= 'x' && *e <= 'z' ? 1 + (*e - 'x') : 0;
+        if (test && (e[1] == '+' || e[1] == '-')) test_fixed = e[1] == '+' ? 1 : -1;
+        const char *ax = getenv("LARECOMP_GYRO_AXES");  // "<yaw><pitch>", e.g. "zx" (the default)
+        if (ax && ax[0] >= 'x' && ax[0] <= 'z' && ax[1] >= 'x' && ax[1] <= 'z') gyro_yaw_axis = ax[0] - 'x', gyro_pitch_axis = ax[1] - 'x';
+    }
+    static uint64_t last_ns;
+    uint64_t now = SDL_GetTicksNS();
+    double dt = last_ns ? (now - last_ns) / 1e9 : 1 / 60.0;
+    if (dt < 1e-4) dt = 1e-4;
+    if (dt > 0.1) dt = 0.1;
+    last_ns = now;
+    double py = gyro_yaw, pp = gyro_pitch;
+    int yaw_axis = gyro_yaw_axis;
+    if (test) {
+        yaw_axis = test - 1;
+        // x+ / z-...: 1 s into the aim, a turn of 10 degrees at 20 degrees/s (a sudden jump is ignored as noise)
+        double ts = gyro_start_ns ? (now - gyro_start_ns) / 1e9 - 1 : 0, ramp = ts < 0 ? 0 : ts > 0.5 ? 0.5 : ts;
+        gyro_yaw = test_fixed ? test_fixed * 20 * ramp * M_PI / 180 : 15 * M_PI / 180 * sin(now / 1e9 * M_PI);
+        gyro_pitch = 0;
+    } else {
+        double k = g_settings.mouse_sens * M_PI / 180 / 1000;  // degrees per pixel
+        gyro_yaw -= atomic_exchange(&mouse_acc_x, 0) * k;
+        gyro_pitch -= atomic_exchange(&mouse_acc_y, 0) * k;
+        double lim = 80 * M_PI / 180;
+        if (gyro_pitch > lim) gyro_pitch = lim;
+        if (gyro_pitch < -lim) gyro_pitch = -lim;
+    }
+    double ry[3][3], rp[3][3], r[3][3];
+    mat_rot(ry, yaw_axis, gyro_yaw);
+    mat_rot(rp, gyro_pitch_axis, gyro_pitch);
+    mat_mul(r, ry, rp);
     memset(s, 0, 0x60);
-    *(int64_t *)(s + 0x00) = 16666667;
+    *(int64_t *)(s + 0x00) = (int64_t)(dt * 1e9);
     *(int64_t *)(s + 0x08) = sampling;
-    float *acc = (float *)(s + 0x10);
-    acc[2] = -1.0f;  // gravity, controller lying level
-    float *dir = (float *)(s + 0x34);
-    dir[0] = dir[4] = dir[8] = 1.0f;  // identity orientation
-    *(uint32_t *)(s + 0x58) = 1;      // IsConnected
+    float *acc = (float *)(s + 0x10), *gyr = (float *)(s + 0x1c), *ang = (float *)(s + 0x28), *dir = (float *)(s + 0x34);
+    for (int i = 0; i < 3; i++) acc[i] = (float)-r[2][i];  // gravity (world -z) in the controller's frame: R^T (0,0,-1)
+    gyr[yaw_axis] += (float)((gyro_yaw - py) / dt / (2 * M_PI));
+    gyr[gyro_pitch_axis] += (float)((gyro_pitch - pp) / dt / (2 * M_PI));
+    ang[yaw_axis] += (float)(gyro_yaw / (2 * M_PI));
+    ang[gyro_pitch_axis] += (float)(gyro_pitch / (2 * M_PI));
+    for (int a = 0; a < 3; a++)  // direction: the controller's x, y, z axes in world coordinates (columns of R)
+        for (int i = 0; i < 3; i++) dir[a * 3 + i] = (float)r[i][a];
+    *(uint32_t *)(s + 0x58) = 1;  // IsConnected
 }
 static int64_t six_axis_sampling;
 HLE_FUNC("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", hid_six_axis_handles) {
@@ -542,17 +629,45 @@ HLE_FUNC("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_
     for (int i = 0; i < n; i++) out[i] = (id & 0xFF) << 8 | (uint32_t)i | 0x04000000u;  // (opaque to the game)
     c->x[0] = (uint64_t)n;
 }
-HLE_FUNC("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_start) { (void)c; }
-HLE_FUNC("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_stop) { (void)c; }
+HLE_FUNC("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_start) {
+    // aiming begins (the game measures the turn from here): the virtual controller starts level again
+    gyro_start_ns = SDL_GetTicksNS();
+    gyro_yaw = gyro_pitch = 0;
+    atomic_store(&mouse_acc_x, 0);
+    atomic_store(&mouse_acc_y, 0);
+    extern uint64_t renderer_present_count(void);
+    LOG("[input] six-axis sensor started (frame %llu)\n", (unsigned long long)renderer_present_count());
+}
+HLE_FUNC("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_stop) {
+    extern uint64_t renderer_present_count(void);
+    if (getenv("LARECOMP_GYRO_TEST")) LOG("[input] six-axis sensor stopped (frame %llu)\n", (unsigned long long)renderer_present_count());
+}
+static void six_axis_log(Cpu *c) {  // (LARECOMP_GYRO_TEST: when the game reads it, and from where)
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_GYRO_TEST") != NULL;
+    extern uint64_t renderer_present_count(void);
+    static uint64_t last, n;
+    uint64_t f = renderer_present_count();
+    n++;
+    if (on && (n <= 8 || f / 30 != last / 30))
+        LOG("[gyro] read #%llu at frame %llu (lr %llx)\n", (unsigned long long)n, (unsigned long long)f, (unsigned long long)c->x[30]);
+    last = f;
+}
 HLE_FUNC("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", hid_six_axis_state) {
+    six_axis_log(c);
     six_axis_fill((uint8_t *)(uintptr_t)c->x[0], ++six_axis_sampling);
 }
 HLE_FUNC("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", hid_six_axis_states) {
+    six_axis_log(c);
     int n = (int)c->x[1];
     if (n > 0) six_axis_fill((uint8_t *)(uintptr_t)c->x[0], ++six_axis_sampling);  // the latest sample only
     c->x[0] = n > 0 ? 1 : 0;
 }
-HLE_FUNC("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", hid_six_axis_at_rest) { c->x[0] = 1; }
+HLE_FUNC("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", hid_six_axis_at_rest) {
+    static int n;
+    if (getenv("LARECOMP_GYRO_TEST") && n++ < 8) LOG("[gyro] IsSixAxisSensorAtRest (lr %llx)\n", (unsigned long long)c->x[30]);
+    c->x[0] = 0;  // never at rest: at rest, the game stopped reading the sensor (a hand-held console never is)
+}
 HLE_FUNC("_ZN2nn3hid25EnableSixAxisSensorFusionERKNS0_19SixAxisSensorHandleEb", hid_six_axis_fusion) { (void)c; }
 HLE_FUNC("_ZN2nn3hid28IsSixAxisSensorFusionEnabledERKNS0_19SixAxisSensorHandleE", hid_six_axis_fusion_on) { c->x[0] = 1; }
 HLE_FUNC("_ZN2nn3hid32SetSixAxisSensorFusionParametersERKNS0_19SixAxisSensorHandleEff", hid_six_axis_set_params) { (void)c; }
