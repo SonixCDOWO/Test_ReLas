@@ -1,5 +1,8 @@
 # Análise do LASRecomp → viabilidade de um recomp do Pokémon Let's Go Eevee
 
+_Documento histórico: a análise de viabilidade feita antes de começar. O estado atual está em
+[PROGRESSO.md](PROGRESSO.md)._
+
 Data: 2026-10-14 · Referência: `reference/LASRecomp` (commit clonado com `--depth 1`, licença MIT, © 2026 Peiikai)
 
 ## TL;DR

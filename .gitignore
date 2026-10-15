@@ -25,3 +25,9 @@ save/
 larecomp.ini
 *.log
 mods/
+
+# Logs que o driver da NVIDIA cria na pasta de trabalho
+NVIDIA Corporation/
+# Fontes do sistema do Switch, tiradas do seu console (fonts/README.md)
+fonts/*.bfttf
+fonts/*.ttf

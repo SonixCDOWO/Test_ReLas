@@ -1,13 +1,16 @@
-# System fonts
+# Fontes do sistema (opcional)
 
-The game draws its text with the Switch's built-in system font, which isn't part of the game files.
-Without it, LAS Recomp uses Hiragino Sans (built into macOS, the same style of Japanese gothic as the Switch's
-Morisawa UD Shin Go), then Arial.
+Parte dos textos do jogo usa a fonte embutida no sistema do Switch, que não faz parte dos arquivos do jogo. Sem ela,
+o Let's Go Recomp usa a Yu Gothic do Windows (o mesmo estilo de gótico japonês da Morisawa UD Shin Go do Switch) e,
+na falta dela, a Arial. A maior parte do jogo desenha os textos com as fontes do próprio romfs e não muda.
 
-For the exact look, put a dump from your own console here (Switch system archive *FontStandard*, title
-0100000000000811, and *FontNintendoExtension*, 0100000000000810):
+Para o visual exato, coloque aqui uma cópia tirada do **seu** console (arquivos de sistema *FontStandard*,
+título 0100000000000811, e *FontNintendoExtension*, 0100000000000810):
 
-- `nintendo_udsg-r_std_003.bfttf`: the main font (a `.ttf` with the same name, or spelled `nintendo_udsgr_std_003`, also works)
-- `nintendo_ext_003.bfttf`: button glyphs (optional)
+- `nintendo_udsg-r_std_003.bfttf`: a fonte principal (um `.ttf` com o mesmo nome, ou escrito `nintendo_udsgr_std_003`,
+  também serve)
+- `nintendo_ext_003.bfttf`: os símbolos dos botões (opcional)
 
-`LARECOMP_FONT=<file>` overrides everything (.ttf / .otf / .ttc / .bfttf).
+`LARECOMP_FONT=<arquivo>` passa por cima de tudo (.ttf / .otf / .ttc / .bfttf).
+
+Essas fontes são propriedade da Nintendo: ficam fora do git (`.gitignore`) e nunca devem ser compartilhadas.
