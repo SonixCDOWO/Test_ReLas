@@ -14,6 +14,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_GYRO_TEST=x\|y\|z` | giroscópio virtual oscilando ±15° no eixo dado (`z+` / `x-`...: giro de 10° em rampa 1 s depois do início da mira); loga quando o jogo lê o sensor. Para chegar a uma captura: andar pela grama (`STICK_*`) e apertar A no "Get ready"; o encontro é sorteado, repita até o log ter `sensor started` |
 | `mod` / `game_lang` (larecomp.ini) | mod ativo (`mods/<nome>/`, o log mostra `[mods]` e quantos arquivos do romfs foram trocados) / idioma pedido ao sistema (`en-US`, `es`...; um save existente mantém o seu) |
 | `LARECOMP_LOG_FILES=1` | cada arquivo do romfs lido pelo jogo (descobrir onde está um texto ou imagem para um mod) |
+| `LARECOMP_TOUCH=<de>-<até>[@x,y]` | um dedo indo e voltando em volta de x,y (tela 1280x720; padrão o meio) entre esses frames; loga `[touch]` no começo e no fim do toque. Brincar com Eevee: `X`, `UP`, `A` e A de novo para fechar o tutorial (ex.: `1440:X:6,1490:UP:6,1530:A:6,1640:A:6,1700:A:6` e `LARECOMP_TOUCH=1760-1960@640,250`) |
 | `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
 | `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |
 | `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher com a seção "Teclado e mouse" aberta / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |

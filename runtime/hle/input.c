@@ -3,8 +3,10 @@
 // Both go through the player's bindings (runtime/hle/bindings.c, defaults there: keyboard WASD left stick, arrows
 // d-pad, Space (or Enter) = A, Q (or Backspace) = B, Tab = X, R = Y, Z / C = L / R, 1 / 3 = ZL / ZR, = / - = Plus /
 // Minus, numpad 8/4/5/6 right stick; controller by position, Switch A = east).
-// Mouse: a click in the window takes it (relative mode); then left / right click = A / B and moving it turns the
-// virtual gyro (the Poke Ball aim). The menu (Esc) or leaving the window lets it go.
+// Mouse: while the game aims a Poke Ball (it started the motion sensor) the window holds it (relative mode): moving it
+// turns the virtual gyro, left click = A (throw). Otherwise it is free and is a finger on the touch screen (left
+// button held; Play with Eevee pets this way in handheld mode). Right click = B either way. The menu (Esc) or leaving
+// the window lets it go.
 #include <SDL3/SDL.h>
 #include <ctype.h>
 #include <math.h>
@@ -81,11 +83,28 @@ static void recompute_pad(void) {
 
 // The mouse: held by the game window (relative mode) or free
 static SDL_Window *mouse_win;
+static _Atomic int gyro_aiming;  // the game has the motion sensor started (aiming): the mouse turns the gyro
 static _Atomic int64_t mouse_acc_x, mouse_acc_y;  // motion not yet applied to the virtual gyro, in 1/1000 pixel
+static _Atomic int touch_down;
 static void mouse_release(void) {
     if (mouse_win) SDL_SetWindowRelativeMouseMode(mouse_win, false);
     mouse_win = NULL;
     mouse_buttons = 0;
+    touch_down = 0;
+}
+
+// Touch screen: the free mouse over the game image, in the Switch's 1280x720 screen. g_present_rect: where the
+// image is drawn in the window, in pixels (runtime/nvn/vulkan/device.c).
+double g_present_rect[4] = {0, 0, 1280, 720};
+static _Atomic int32_t touch_x = 640, touch_y = 360;
+static void touch_at(SDL_Window *w, float mx, float my) {
+    float d = w ? SDL_GetWindowPixelDensity(w) : 1;
+    if (d <= 0) d = 1;
+    double r0 = g_present_rect[0], r1 = g_present_rect[1], r2 = g_present_rect[2], r3 = g_present_rect[3];
+    if (r2 <= 0 || r3 <= 0) return;
+    double x = (mx * d - r0) / r2 * 1280, y = (my * d - r1) / r3 * 720;
+    touch_x = (int32_t)(x < 0 ? 0 : x > 1279 ? 1279 : x);
+    touch_y = (int32_t)(y < 0 ? 0 : y > 719 ? 719 : y);
 }
 
 // Forget held keys (the menu took focus) and let the mouse go; the gamepad is re-read on its next event.
@@ -171,23 +190,35 @@ void input_handle_event(const SDL_Event *e) {
         if (e->key.scancode < SDL_SCANCODE_COUNT) keys_down[e->key.scancode] = e->type == SDL_EVENT_KEY_DOWN;
         recompute_keyboard();
         break;
-    case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: {
-        bool down = e->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-        if (!mouse_win) {  // the first click only takes the mouse
-            if (down && e->button.button == SDL_BUTTON_LEFT && (mouse_win = SDL_GetWindowFromID(e->button.windowID)))
-                SDL_SetWindowRelativeMouseMode(mouse_win, true);
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: case SDL_EVENT_MOUSE_MOTION: {
+        bool motion = e->type == SDL_EVENT_MOUSE_MOTION;
+        SDL_Window *w = SDL_GetWindowFromID(motion ? e->motion.windowID : e->button.windowID);
+        // aiming: the window holds the mouse (the gyro); else it is free (the touch screen)
+        if (gyro_aiming && !mouse_win && w) {
+            mouse_win = w;
+            SDL_SetWindowRelativeMouseMode(w, true);
+            touch_down = 0;
+        } else if (!gyro_aiming && mouse_win) {
+            mouse_release();
+        }
+        if (motion) {
+            if (mouse_win) {
+                mouse_acc_x += (int64_t)(e->motion.xrel * 1000);
+                mouse_acc_y += (int64_t)(e->motion.yrel * 1000);
+            } else {
+                touch_at(w, e->motion.x, e->motion.y);
+            }
             break;
         }
-        int bit = e->button.button == SDL_BUTTON_LEFT ? BTN_A : e->button.button == SDL_BUTTON_RIGHT ? BTN_B : -1;
-        if (bit >= 0) mouse_buttons = down ? mouse_buttons | 1ull << bit : mouse_buttons & ~(1ull << bit);
-        break;
-    }
-    case SDL_EVENT_MOUSE_MOTION:
-        if (mouse_win) {
-            mouse_acc_x += (int64_t)(e->motion.xrel * 1000);
-            mouse_acc_y += (int64_t)(e->motion.yrel * 1000);
+        bool down = e->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        if (e->button.button == SDL_BUTTON_RIGHT) {
+            mouse_buttons = down ? mouse_buttons | 1ull << BTN_B : mouse_buttons & ~(1ull << BTN_B);
+        } else if (e->button.button == SDL_BUTTON_LEFT) {
+            if (mouse_win) mouse_buttons = down ? mouse_buttons | 1ull << BTN_A : mouse_buttons & ~(1ull << BTN_A);
+            else { touch_at(w, e->button.x, e->button.y); touch_down = down; }
         }
         break;
+    }
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         mouse_release();
         break;
@@ -550,6 +581,62 @@ HLE_FUNC("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS
     LOG("[input] style set update event bound\n");
 }
 
+// Touch screen: TouchScreenState<16> {int64 sampling; int32 count; pad; TouchState[16]}, TouchState (0x28) {int64
+// delta time; u32 attributes (bit 0 Start, bit 1 End); u32 finger id; u32 x, y; u32 diameter x, y; u32 rotation;
+// pad}. One finger: the free mouse (touch_at), or LARECOMP_TOUCH="<from>-<to>[@x,y]" (frames: a back-and-forth
+// petting stroke around x,y - default the middle of the screen - for tests).
+static bool touch_now(int32_t *x, int32_t *y) {
+    static int from = -1, to, cx = 640, cy = 330;
+    if (from < 0) {
+        from = 0;
+        const char *e = getenv("LARECOMP_TOUCH");
+        if (e) sscanf(e, "%d-%d@%d,%d", &from, &to, &cx, &cy);
+    }
+    extern uint64_t renderer_present_count(void);
+    uint64_t f = renderer_present_count();
+    if (from > 0 && f >= (uint64_t)from && f <= (uint64_t)to) {
+        double t = (double)(f - from);
+        *x = (int32_t)(cx + 120 * sin(t * 0.25));
+        *y = (int32_t)(cy + 20 * sin(t * 0.5));
+        return true;
+    }
+    *x = touch_x, *y = touch_y;
+    return touch_down && !menu_input_captured();
+}
+HLE_FUNC("_ZN2nn3hid20GetTouchScreenStatesILm16EEEiPNS0_16TouchScreenStateIXT_EEEi", hid_touch_states) {
+    uint8_t *s = (uint8_t *)(uintptr_t)c->x[0];
+    int count = (int)c->x[1];
+    static int64_t sampling;
+    static bool was_down;
+    static int nlog;
+    if (count <= 0) { c->x[0] = 0; return; }
+    int32_t x, y;
+    bool down = touch_now(&x, &y);
+    memset(s, 0, 0x290);
+    *(int64_t *)s = ++sampling;
+    if (down || was_down) {  // (the release is one more sample, flagged End)
+        uint8_t *t = s + 0x10;
+        *(int32_t *)(s + 8) = 1;
+        *(int64_t *)t = 16666667;
+        *(uint32_t *)(t + 8) = down && !was_down ? 1 : !down ? 2 : 0;
+        *(uint32_t *)(t + 0x10) = (uint32_t)x;
+        *(uint32_t *)(t + 0x14) = (uint32_t)y;
+        *(uint32_t *)(t + 0x18) = *(uint32_t *)(t + 0x1c) = 15;
+        if (nlog < 12 && down != was_down) {
+            nlog++;
+            LOG("[touch] %s at %d,%d (lr %llx)\n", down ? "down" : "up", x, y, (unsigned long long)c->x[30]);
+        }
+    }
+    was_down = down;
+    c->x[0] = 1;
+}
+// Gestures: none yet (logged: does the game use them?).
+HLE_FUNC("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", hid_gesture_states) {
+    static int nlog;
+    if (nlog++ < 3) LOG("[touch] GetGestureStates (lr %llx)\n", (unsigned long long)c->x[30]);
+    c->x[0] = 0;
+}
+
 // Vibration devices: accepted but inert (the SDK's vibration node graph stays recompiled).
 HLE_FUNC("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", hid_init_vibration) { (void)c; }
 // Six-axis (motion) sensor. Let's Go aims Poke Ball throws with the gyro in handheld mode; with no sensor behind it
@@ -630,7 +717,9 @@ HLE_FUNC("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_
     c->x[0] = (uint64_t)n;
 }
 HLE_FUNC("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_start) {
-    // aiming begins (the game measures the turn from here): the virtual controller starts level again
+    // aiming begins (the game measures the turn from here): the virtual controller starts level again, and the
+    // mouse becomes the gyro at its next move (input_handle_event)
+    gyro_aiming = 1;
     gyro_start_ns = SDL_GetTicksNS();
     gyro_yaw = gyro_pitch = 0;
     atomic_store(&mouse_acc_x, 0);
@@ -639,6 +728,7 @@ HLE_FUNC("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_
     LOG("[input] six-axis sensor started (frame %llu)\n", (unsigned long long)renderer_present_count());
 }
 HLE_FUNC("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_stop) {
+    gyro_aiming = 0;
     extern uint64_t renderer_present_count(void);
     if (getenv("LARECOMP_GYRO_TEST")) LOG("[input] six-axis sensor stopped (frame %llu)\n", (unsigned long long)renderer_present_count());
 }

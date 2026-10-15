@@ -39,8 +39,8 @@ void vk_imgui_backend_shutdown(void);
 // Keyboard: the game's actions in Let's Go's words with the key bound to each. Click one, then press the new key (Esc
 // or 5 s cancels; a key already in use swaps over). Controllers keep their buttons: nothing to set for them.
 static const struct { int slot; const char *name; } k_actions[] = {
-    {BIND_LS_UP, "Andar para cima"},        {BIND_A, "A: confirmar / arremessar"},
-    {BIND_LS_DOWN, "Andar para baixo"},     {BIND_B, "B: cancelar"},
+    {BIND_LS_UP, "Andar para cima"},        {BIND_A, "A (ou Enter): confirmar"},
+    {BIND_LS_DOWN, "Andar para baixo"},     {BIND_B, "B (ou Backspace): cancelar"},
     {BIND_LS_LEFT, "Andar para a esquerda"}, {BIND_X, "X: menu"},
     {BIND_LS_RIGHT, "Andar para a direita"}, {BIND_Y, "Y: opções / caixa"},
     {BIND_UP, "Direcional cima"},           {BIND_L, "L: mover Pokémon / itens"},
@@ -94,9 +94,10 @@ static void keys_section(void) {
         ImGui::EndTable();
     }
     ImGui::PopStyleVar(2);
-    ImGui::TextDisabled("Enter e Backspace também valem como A e B. Esc cancela a troca.");
+    if (cap_dev == BIND_DEV_KEY) ImGui::TextDisabled("Aperte a nova tecla. Esc cancela; uma tecla já usada troca de lugar.");
     if (!bind_is_default(BIND_DEV_KEY) && ImGui::Button("Restaurar teclas padrão")) bind_reset(BIND_DEV_KEY);
-    ImGui::TextUnformatted("Mouse: clique na janela para prender (Esc solta); esquerdo = A, direito = B, mover = mirar.");
+    ImGui::TextUnformatted("Mouse na mira da Poké Ball: mover = mirar, esquerdo = arremessar.");
+    ImGui::TextUnformatted("Fora dela: esquerdo = tocar na tela (Brincar com Eevee). Direito = B.");
     ImGui::PushItemWidth(420);
     ImGui::SliderFloat("Sensibilidade do mouse", &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
     ImGui::PopItemWidth();
