@@ -89,6 +89,10 @@ void rt_paths_init(void) {
     const char *env = getenv("LARECOMP_DATA_ROOT");
     if (env && *env) snprintf(root, sizeof root, "%s", env);
     else if (is_dir("extracted")) snprintf(root, sizeof root, "%s", g_start), g_dev = true;  // dev / portable: as before
+    else if (snprintf(root, sizeof root, "%s/../extracted", g_exe_dir), is_dir(root))  // exe in build/ or build/jogo/,
+        snprintf(root, sizeof root, "%s/..", g_exe_dir), g_dev = true;               // started by double-click: the
+    else if (snprintf(root, sizeof root, "%s/../../extracted", g_exe_dir), is_dir(root))  // source tree around it
+        snprintf(root, sizeof root, "%s/../..", g_exe_dir), g_dev = true;
     else {
 #ifdef _WIN32
         snprintf(root, sizeof root, "%s", g_exe_dir);
