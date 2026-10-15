@@ -24,7 +24,7 @@
 #ifndef GAMELIB_ID
 #define GAMELIB_ID "dev"
 #endif
-#define GAMELIB_ABI 2
+#define GAMELIB_ABI 3  // (3: FN_ENTER calls the function hooks, runtime/fnhook.c)
 #define GAMELIB_MAX_MODULES 4
 
 // One table per recompiled module, in load order (main, sdk, subsdk0, subsdk1: runtime/loader.c).

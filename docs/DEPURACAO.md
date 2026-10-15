@@ -73,6 +73,19 @@ RDC=<captura.rdc> EID=<evento> OUT=<arquivo.txt> USERPROFILE="$H" HOME="$H"   "/
 
 Não ligue debug info nos shaders para capturar: com milhares de shaders, o replay leva mais de 20 minutos só para abrir.
 
+### Funções do jogo: perfil, comparação e ganchos
+- `LARECOMP_FNPROF=<de>:<até>` grava em `build/fnprof.txt` (ou `LARECOMP_FNPROF_OUT`) as funções do jogo que
+  rodaram nesses frames: endereço, chamadas, ordem da primeira entrada e o `lr` dessa entrada (runtime/fnprof.c).
+  `LARECOMP_FNPROF_BT=<addr>[,...]` (+ `LARECOMP_FNPROF_BT_MAX=<n>`) imprime a pilha (funções `f_<addr>`) nas
+  primeiras entradas dessas funções.
+- `tools/fncompare.py --base <perfis sem o evento> --event nome=<perfil>` lista o que só o evento executou; com dois
+  eventos, o que é comum e o que é de cada um (exemplo: docs/MODO-BATALHA.md).
+- **Ganchos** (runtime/fnhook.c): toda função gerada passa por `FN_ENTER`, que chama `rt_fnhook` enquanto houver
+  gancho registrado (`rt_register_fnhook(addr, fn)`; `fn` devolve 1 para tratar a chamada no lugar do jogo;
+  `rt_call_original` roda a função original de dentro do gancho). Mudar comportamento não exige gerar a DLL de novo.
+- `LARECOMP_HOOK_DUMP="<addr>:<args>[;...]"` registra, nas primeiras `LARECOMP_HOOK_DUMP_MAX` (4) entradas, x0..x7 e a
+  memória dos argumentos: `x2:30` = 0x30 bytes em x2; `*x0:400` = 0x400 bytes no ponteiro guardado em x0.
+
 ### Referências cruzadas no código do jogo (`tools/xrefs.py`)
 `cd tools && ../.venv/Scripts/python xrefs.py calls <addr>` (quem chama a função que contém o endereço), `imm <valor>`
 (instruções com esse imediato) ou `float <valor>` (onde a constante está e quem a carrega). A desmontagem do `main`

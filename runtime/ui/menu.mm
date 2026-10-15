@@ -869,46 +869,32 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     if (open) {
         // dim the game behind the menu
         ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 110));
-        float w = fminf(io.DisplaySize.x * 0.9f, 1500 * scale), h = io.DisplaySize.y - 2 * 18 * scale;  // (all the height: a slim margin)
+        // Let's Go Recomp: Esc / F1 / Minus+Plus only ask whether to close the game (the Settings tabs - video, audio,
+        // randomizer, cheats, cosmetics... - were Link's Awakening's; the start screen has resolution and fullscreen).
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
-        ImGui::Begin("##menu", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-        ImFont *keep_big = g_font_big;  // (the window in the menu's font; header() uses g_font_big)
-        g_font_big = g_menu_font_big;
+        ImGui::Begin("##quit", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                         ImGuiWindowFlags_AlwaysAutoResize);
         ImGui::PushFont(g_menu_font);
-        // header as on the start screen's Settings: the title, and a close X in the corner (B / Esc too). ("Title
-        // screen" - rt_request_reboot(RT_REBOOT_TITLE) - is to find a new home; user 2026-10-11.)
-        ImGui::PushFont(g_font_big);
-        ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "Settings");
-        ImGui::PopFont();
-        {
-            float bx = 44 * scale;
-            ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - bx);
-            ImVec2 p = ImGui::GetCursorScreenPos();
-            ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
-            bool close = ImGui::InvisibleButton("##close", ImVec2(bx, bx), ImGuiButtonFlags_EnableNav);
-            ImGui::PopStyleColor();
-            bool hot = ImGui::IsItemHovered() || ImGui::IsItemFocused();
-            ImU32 col = hot ? IM_COL32(236, 194, 84, 255) : IM_COL32(220, 216, 205, 255);
-            float m = bx * 0.3f, t = (hot ? 3.0f : 2.4f) * scale * 1.5f;
-            ImDrawList *dl = ImGui::GetWindowDrawList();
-            if (hot) dl->AddRectFilled(p, ImVec2(p.x + bx, p.y + bx), IM_COL32(255, 255, 255, 20), 8 * scale);
-            dl->AddLine(ImVec2(p.x + m, p.y + m), ImVec2(p.x + bx - m, p.y + bx - m), col, t);
-            dl->AddLine(ImVec2(p.x + bx - m, p.y + m), ImVec2(p.x + m, p.y + bx - m), col, t);
-            if (close) set_open(false);
+        ImGui::TextUnformatted("Deseja fechar o jogo?");
+        ImGui::TextDisabled("O progresso desde o último save será perdido.");
+        ImGui::Spacing();
+        float bw = 220 * scale;
+        static bool focus_no;
+        if (!focus_no) { ImGui::SetKeyboardFocusHere(1); focus_no = true; }  // (Não first: Enter / A by reflex keeps playing)
+        if (ImGui::Button("Sim", ImVec2(bw, 0))) {
+            settings_save();
+            SDL_Event q = {};
+            q.type = SDL_EVENT_QUIT;
+            SDL_PushEvent(&q);
         }
-
-        bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId), typing = ui_text_busy();  // (before the
-        tabs_body(scale, true, NULL);                                                                          //  pages run)
-        // B with nothing focused-deeper closes the menu (not the Esc / B that ends typing: typing is from the frame
-        // before, so it's still true the frame a field lets go)
-        if (!any_popup && !typing && !ui_text_busy() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-            (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
+        ImGui::SameLine();
+        bool no = ImGui::Button("Não", ImVec2(bw, 0));
+        if (no || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             set_open(false);
+            focus_no = false;
+        }
         ImGui::PopFont();
-        g_font_big = keep_big;
         ImGui::End();
-        osk_draw(g_font_big, scale);  // (a text field activated with the controller)
     }
 
     if (kbd) keyboard_draw(io, scale);

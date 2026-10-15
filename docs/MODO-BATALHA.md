@@ -27,10 +27,25 @@ Conclusão: captura (`28ef70`) e batalha (`28bb60`/`28e480`) são métodos vizin
 (`main+28xxxx`). O desvio seria em `305ad0`: montar uma configuração de batalha selvagem para o Pokémon tocado e
 chamar o início de batalha no lugar da captura; depois da batalha, iniciar a captura (o fluxo dos lendários).
 
+## Etapa 2: ganchos e primeiros dados ✅
+
+- **Ganchos de função** (runtime/fnhook.c, `FN_ENTER` em runtime/cpu.h, ABI da DLL 3): o runtime pode tratar ou
+  envolver qualquer função do jogo sem gerar a DLL de novo. `LARECOMP_HOOK_DUMP` registra argumentos e memória.
+- **Batalha do Youngster Ronny** (`28bb60`, chamado só pelo comando de script `17e150`):
+  - `x2` = parâmetros de 0x30 bytes: `{0, 0, 0x1C1, 0, 0x200, ...}`; o comando de script recebe os mesmos 0x1C1 e
+    0x200 - **0x1C1 (449) deve ser o treinador**, 0x200 flags;
+  - `*x0` = objeto grande com contagem de referências (vtable `0x7001537770`): o pedido de batalha do evento.
+- **Outros caminhos** (referências diretas no `main`, `tools/xrefs.py`):
+  - `28bc30` (inicia a batalha de fato) tem dois chamadores: `28bb60` (script) e **`28bda0`**, chamado por
+    `289c4c` - um método virtual que monta os parâmetros com um **modo 0 ou 3** conforme a flag `[obj+0xA6]`;
+  - a captura `28ef70` tem quatro chamadores: o encontro selvagem (`305ac4`), `28ea90`, `854a48` e **`31a0e0`**,
+    chamado pelo método virtual `319e20`, ao lado da sequência de batalha (`31a470`) - candidato a "batalha e depois
+    captura" dos lendários.
+
 ## Próximas etapas
-2. **Gancho em tempo de execução**: hoje cada mudança no código do jogo exige gerar a DLL de novo (~22 min). Uma
-   única geração com o `FN_ENTER` capaz de desviar uma função para código do runtime permitiria iterar rápido.
-3. **Decodificar a configuração de batalha** (os 0x30 bytes e os parâmetros de `28bb60`): gravá-la numa batalha de
-   treinador e, se possível, num encontro com lendário (batalha selvagem nativa).
-4. **Protótipo**: no encontro selvagem, batalha com o Pokémon tocado; depois, captura.
-5. Detalhes: fugir, experiência, o Pokémon sumir do mapa, e ligar/desligar o modo no launcher.
+3. Confirmar o caminho alternativo (`289c4c` → `28bda0`, modo 3) e a captura pós-batalha (`319e20` → `31a0e0`) em
+   execução: o ideal é um save perto de uma batalha selvagem nativa (lendário ou Snorlax); sem isso, forçar o
+   método e observar.
+4. **Protótipo**: no encontro selvagem (`305ad0`), em vez de `28ef70`, montar o pedido de batalha selvagem para o
+   Pokémon tocado e iniciar a batalha; no fim, a captura.
+5. Detalhes: fugir, experiência, o Pokémon sumir do mapa, ligar/desligar o modo no launcher.
