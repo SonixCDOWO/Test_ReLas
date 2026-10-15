@@ -38,6 +38,8 @@ uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
 #define PROF_ADD(v) do { if (prof) v += SDL_GetTicksNS() - prof_t0_; } while (0)
 static _Atomic int stat_compiles;
+static _Atomic uint64_t stat_translate_ns, stat_spirv_ns;  // CPU time translating / compiling programs
+static _Atomic int new_pipes;  // pipelines created since the pipeline cache was last saved
 static uint64_t op_counts[CMD_COUNT];
 bool g_debug_frame;
 static char stats_text[640];
@@ -544,7 +546,25 @@ void vk_prof_frame(uint64_t frame, uint64_t present_ns) {
     last_t = now; l_exec = cum_exec; l_wait = cum_wait; l_draws = cum_draws; l_subs = cum_submits;
 }
 
+static void save_pipeline_cache(void *a) {
+    (void)a;
+    uint64_t t0 = SDL_GetTicksNS();
+    vk_pipeline_cache_save();
+    LOG("[vk] pipeline cache saved (%.0f ms)\n", (SDL_GetTicksNS() - t0) / 1e6);
+}
+
 const char *renderer_stats(void) {
+    // The pipeline cache was written only at a clean exit: a crash or a killed process lost every pipeline built in
+    // the session, and the next one popped in again. Save it on a worker once a burst of new pipelines settles
+    // (no new ones for ~6 s: entering an area builds them for a few seconds).
+    static int quiet, last_new;
+    int np = atomic_load(&new_pipes);
+    if (np && np == last_new) {
+        if (++quiet >= 3) { atomic_fetch_sub(&new_pipes, np); np = 0; quiet = 0; run_job(save_pipeline_cache, NULL); }
+    } else {
+        quiet = 0;
+    }
+    last_new = np;
     static int dumps;
     if (dumps++ < 3) {
         LOG("[vk] command counts:");
@@ -552,10 +572,11 @@ const char *renderer_stats(void) {
         LOG("\n");
     }
     snprintf(stats_text, sizeof stats_text,
-             "%llu draws, %llu skipped, %llu passes, %llu dispatches, %llu flushes, wait %.0fms, compile %d, fbcopy %llu, upload %.1fMB",
+             "%llu draws, %llu skipped, %llu passes, %llu dispatches, %llu flushes, wait %.0fms, compile %d (translate %.0fms, spirv %.0fms), fbcopy %llu, upload %.1fMB",
              (unsigned long long)stat_draws, (unsigned long long)stat_skipped, (unsigned long long)stat_passes,
              (unsigned long long)stat_dispatches, (unsigned long long)stat_flushes, (double)stat_wait_ns / 1e6,
-             atomic_exchange(&stat_compiles, 0), (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
+             atomic_exchange(&stat_compiles, 0), atomic_exchange(&stat_translate_ns, 0) / 1e6, atomic_exchange(&stat_spirv_ns, 0) / 1e6,
+             (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
     stat_feedback_copies = stat_upload_bytes = 0;
     if (g_exp_count[0] | g_exp_count[1] | g_exp_count[2] | g_exp_count[3]) {
         LOG("[exp] skin identity %llu, ubo direct %llu, ubo copied %llu, one-bone shaders %llu\n",
@@ -973,6 +994,7 @@ static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
 static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
+    uint64_t t0 = SDL_GetTicksNS();
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
     if (sv && getenv("LARECOMP_RENDERDOC_AT")) {  // which guest shader each SPIR-V is: tools/rdc_skin.py (FNV-1a 64)
@@ -992,6 +1014,7 @@ static void compile_program(void *arg) {
     free(sv);
     free(sf);
     p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+    atomic_fetch_add(&stat_spirv_ns, SDL_GetTicksNS() - t0);
     atomic_fetch_add(&stat_compiles, 1);
     atomic_store(&p->state, p->vs && p->fs ? 1 : 2);
 }
@@ -1001,6 +1024,7 @@ static void translate_program(void *arg) {
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
     pthread_mutex_lock(&translate_lock);
+    uint64_t t0 = SDL_GetTicksNS();
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
     // Experiment X4 (docs/PLANO-3D.md), LARECOMP_VK_SKIN_ONEBONE=1: skinned vertex shaders see 100% weight on the
     // first bone (a12 = bone weights) - rigid, but whole, if the first bone's matrix reaches the GPU correctly.
@@ -1062,6 +1086,7 @@ static void translate_program(void *arg) {
         p->fkey.vs_out_mask = p->vi->out_mask;
         p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[1], p->cmax[1], STAGE_FRAGMENT, &p->fkey);
     }
+    atomic_fetch_add(&stat_translate_ns, SDL_GetTicksNS() - t0);
     pthread_mutex_unlock(&translate_lock);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
@@ -1412,6 +1437,7 @@ static void build_pipeline(void *arg) {
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
     }
     atomic_fetch_add(&stat_compiles, 1);
+    if (r == VK_SUCCESS) atomic_fetch_add(&new_pipes, 1);
     atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
 }
 
@@ -1851,6 +1877,7 @@ static void build_compute(void *arg) {
                                       .layout = cp->p.layout};
     VkResult r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &cp->pipe);
     atomic_fetch_add(&stat_compiles, 1);
+    if (r == VK_SUCCESS) atomic_fetch_add(&new_pipes, 1);
     atomic_store(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }

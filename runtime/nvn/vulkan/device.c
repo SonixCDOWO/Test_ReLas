@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -235,9 +236,11 @@ static void create_device(void) {
     free(data);
 }
 
-void vk_pipeline_cache_save(void) {
+void vk_pipeline_cache_save(void) {  // (exit and exec.c's periodic save: one writer of the .tmp at a time)
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&lock);
     size_t sz = 0;
-    if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, NULL) != VK_SUCCESS || !sz) return;
+    if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, NULL) != VK_SUCCESS || !sz) { pthread_mutex_unlock(&lock); return; }
     void *data = malloc(sz);
     if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, data) == VK_SUCCESS) {
         mkdir("cache", 0755);
@@ -248,7 +251,7 @@ void vk_pipeline_cache_save(void) {
             if (ok) { remove("cache/vk_pipelines.bin"); rename("cache/vk_pipelines.bin.tmp", "cache/vk_pipelines.bin"); }
         }
     }
-    free(data);
+    free(data);    pthread_mutex_unlock(&lock);
 }
 
 // ================================================================== swapchain

@@ -948,6 +948,39 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         } else {
             fail(c, "txq type %d", qt);
         }
+    } else if (OPM(0xdf58000000000000ull, 0xfff8000000000000ull)) {  // TMML: level of detail a sample would use
+        // Same layout as TEX (index, array, target, mask); coordinates from Ra (layer first). Results are 8.8 fixed
+        // point in the inverse order of textureQueryLod: x = computed lod, y = the level accessed (Ryujinx InstEmitTexture).
+        uint32_t index = (uint32_t)bits(w, 36, 13);
+        int target = (int)bits(w, 29, 2);
+        bool array = bits(w, 28, 1);
+        uint32_t mask = (uint32_t)bits(w, 31, 4);
+        int type = target == 0 ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D)
+                 : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D)
+                 : target == 2 ? TEXTYPE_3D
+                               : (array ? TEXTYPE_CUBE_ARRAY : TEXTYPE_CUBE);
+        int ncoord = target == 0 ? 1 : target == 1 ? 2 : 3;
+        int slot = tex_slot(c, index, type, false, array);
+        int ar = a + (array ? 1 : 0);
+        if (array) c->reg_used[a] = 1;
+        char co[160] = "", tmp[48];
+        for (int i = 0; i < ncoord; i++) {
+            sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", ar + i);
+            c->reg_used[ar + i] = 1;
+            strcat(co, tmp);
+        }
+        const char *gv = ncoord == 1 ? "" : ncoord == 2 ? "vec2" : "vec3", *mv = ncoord == 1 ? "" : ncoord == 2 ? "float2" : "float3";
+        if (c->stage != STAGE_FRAGMENT)  // (no derivatives outside fragment shaders: the base level)
+            sp(&c->body, "    { float2 lq = float2(0.0f);\n");
+        else if (c->glsl)
+            sp(&c->body, "    { vec2 lq = textureQueryLod(t%d, %s(%s)).yx;\n", slot, gv, co);
+        else
+            sp(&c->body, "    { float2 lq = float2(t%d.calculate_unclamped_lod(s%d, %s(%s)), t%d.calculate_clamped_lod(s%d, %s(%s)));\n",
+               slot, slot, mv, co, slot, slot, mv, co);
+        int n = 0;
+        for (int i = 0; i < 2; i++)
+            if (mask & (1u << i)) { c->reg_used[d + n] = 1; sp(&c->body, "      r%d = uint(int(lq[%d] * 256.0f));\n", d + n, i); n++; }
+        sp(&c->body, "    }\n");
     } else if (OPM(0x5080000000000000ull, 0xfff8000000000000ull)) {  // MUFU
         int fn = (int)bits(w, 20, 4);
         const char *x = NA(F(R(a)), bits(w, 48, 1), bits(w, 46, 1));

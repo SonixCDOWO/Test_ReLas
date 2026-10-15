@@ -25,8 +25,11 @@ _Atualizado em 15/10/2026._
 2. **Mira por movimento**: o sensor responde sempre "parado". Opção futura: mirar com o analógico direito ou com
    o giroscópio do controle.
 3. **Recursos online** (Pokémon GO, trocas, Poké Ball Plus): desligados de propósito (serviços offline).
-4. **Desempenho**: 1080p interno (`LARECOMP_SCALE=1`, ou F1 → resolução 1x) fica estável em 30 fps numa RTX 3080, e a GPU
-   aguenta ~60. Gameplay longo ainda não foi medido.
+4. **Desempenho** (medido em 15/10/2026, `tools/perf_summary.py` sobre 4 min andando pela Rota 1): 30 fps estáveis
+   (mínimo 28,6 por janela de 2 s, nenhum quadro acima de 50 ms fora o print do teste, nenhum underrun de áudio) numa
+   RTX 3080. Ao entrar numa área, ~0,3 s de objetos aparecendo enquanto os shaders novos ficam prontos (com cache: ~200 ms
+   de tradução e ~90 ms de SPIR-V para ~380 programas); na primeira vez sem cache, alguns segundos. O cache de pipelines
+   agora é salvo durante o jogo, não só ao fechar.
 5. **60 fps de verdade**: a lógica do jogo anda um passo por quadro. Com `LARECOMP_FPS=60` ele chega ao mesmo estado
    no mesmo número de quadro em metade do tempo, ou seja, roda em velocidade dobrada (medido em 15/10/2026 com
    `tools/repro.sh`). 60 fps exigiria mudar o passo de tempo do próprio jogo. O que já se sabe:
