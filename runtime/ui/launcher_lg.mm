@@ -1,11 +1,15 @@
-// Let's Go Recomp start screen: resolution, fullscreen, anti-aliasing, Play - nothing else. Replaces LASRecomp's start
-// screen (launcher.mm: Link's Awakening's randomizer, seeds, update check, game-file setup) on Windows / Linux; macOS
-// keeps the old one. The choices go to larecomp.ini (settings.c: render_height, fullscreen, smaa).
+// Let's Go Recomp start screen: resolution, fullscreen, anti-aliasing, the keyboard / mouse controls, Play - nothing
+// else. Replaces LASRecomp's start screen (launcher.mm: Link's Awakening's randomizer, seeds, update check, game-file
+// setup) on Windows / Linux; macOS keeps the old one. The choices go to larecomp.ini (settings.c: render_height,
+// fullscreen, smaa, mouse_sens; bind_key_* from runtime/hle/bindings.c).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
-// LARECOMP_LAUNCHER_AUTOPLAY=1 plays at once.
+// LARECOMP_LAUNCHER_AUTOPLAY=1 plays at once; LARECOMP_LAUNCHER_KEYS=1 opens the keyboard section,
+// LARECOMP_LAUNCHER_KEYS=<slot> also waits for a new key for that input (runtime/input_bind.h BIND_*), and
+// <slot>:<key name> presses that key for it.
 #include <SDL3/SDL.h>
 #include <float.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "imgui.h"
 #ifndef __APPLE__
@@ -14,6 +18,7 @@
 #include "imgui_impl_sdl3.h"
 
 extern "C" {
+#include "input_bind.h"
 #include "paths.h"
 #include "settings.h"
 void settings_save(void);
@@ -30,6 +35,72 @@ void vk_imgui_backend_shutdown(void);
 }
 
 #ifndef __APPLE__
+// Keyboard: the game's actions in Let's Go's words with the key bound to each. Click one, then press the new key (Esc
+// or 5 s cancels; a key already in use swaps over). Controllers keep their buttons: nothing to set for them.
+static const struct { int slot; const char *name; } k_actions[] = {
+    {BIND_LS_UP, "Andar para cima"},        {BIND_A, "A: confirmar / arremessar"},
+    {BIND_LS_DOWN, "Andar para baixo"},     {BIND_B, "B: cancelar"},
+    {BIND_LS_LEFT, "Andar para a esquerda"}, {BIND_X, "X: menu"},
+    {BIND_LS_RIGHT, "Andar para a direita"}, {BIND_Y, "Y: opções / caixa"},
+    {BIND_UP, "Direcional cima"},           {BIND_L, "L: mover Pokémon / itens"},
+    {BIND_DOWN, "Direcional baixo"},        {BIND_R, "R: mover Pokémon / itens"},
+    {BIND_LEFT, "Direcional esquerda"},     {BIND_PLUS, "+: parceiro"},
+    {BIND_RIGHT, "Direcional direita"},     {BIND_MINUS, "-: Pokédex"},
+};
+
+static const char *key_name(int sc) {
+    switch (sc) {
+    case SDL_SCANCODE_SPACE: return "Espaço";
+    case SDL_SCANCODE_RETURN: return "Enter";
+    case SDL_SCANCODE_UP: return "Seta cima";
+    case SDL_SCANCODE_DOWN: return "Seta baixo";
+    case SDL_SCANCODE_LEFT: return "Seta esquerda";
+    case SDL_SCANCODE_RIGHT: return "Seta direita";
+    case SDL_SCANCODE_LSHIFT: return "Shift esq.";
+    case SDL_SCANCODE_RSHIFT: return "Shift dir.";
+    case SDL_SCANCODE_LCTRL: return "Ctrl esq.";
+    case SDL_SCANCODE_RCTRL: return "Ctrl dir.";
+    case 0: return "(nenhuma)";
+    default: return bind_key_label(sc);
+    }
+}
+
+static void keys_section(void) {
+    int cap_dev, cap_slot, ms_left;
+    bind_capture_active(&cap_dev, &cap_slot, &ms_left);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2));
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().CellPadding.x, 1));
+    if (ImGui::BeginTable("##keys", 4, ImGuiTableFlags_SizingFixedFit)) {
+        for (size_t i = 0; i < sizeof k_actions / sizeof k_actions[0]; i++) {
+            int slot = k_actions[i].slot;
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(k_actions[i].name);
+            ImGui::TableNextColumn();
+            bool waiting = cap_dev == BIND_DEV_KEY && cap_slot == slot;
+            char lbl[96];
+            if (waiting) snprintf(lbl, sizeof lbl, "Aperte a tecla... %d##k%d", (ms_left + 999) / 1000, slot);
+            else snprintf(lbl, sizeof lbl, "%s##k%d", key_name(g_bind_key[slot]), slot);
+            int pushed = 0;
+            if (waiting) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.42f, 0.12f, 1)); pushed++; }
+            if (!bind_is_default_slot(BIND_DEV_KEY, slot)) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.82f, 0.38f, 1)); pushed++; }
+            if (ImGui::Button(lbl, ImVec2(230, 0))) {
+                if (waiting) bind_capture_cancel();
+                else bind_capture_begin(BIND_DEV_KEY, slot);
+            }
+            ImGui::PopStyleColor(pushed);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar(2);
+    ImGui::TextDisabled("Enter e Backspace também valem como A e B. Esc cancela a troca.");
+    if (!bind_is_default(BIND_DEV_KEY) && ImGui::Button("Restaurar teclas padrão")) bind_reset(BIND_DEV_KEY);
+    ImGui::TextUnformatted("Mouse: clique na janela para prender (Esc solta); esquerdo = A, direito = B, mover = mirar.");
+    ImGui::PushItemWidth(420);
+    ImGui::SliderFloat("Sensibilidade do mouse", &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
+    ImGui::PopItemWidth();
+}
+
 extern "C" void launcher_lg_run(const char *root) {
     (void)root;
     ui_window_init();
@@ -54,16 +125,26 @@ extern "C" void launcher_lg_run(const char *root) {
     bool full = g_settings.fullscreen, smaa = g_settings.antialias == AA_SMAA;
     long shot_at = getenv("LARECOMP_LAUNCHER_SHOT") ? atol(getenv("LARECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
     bool play = getenv("LARECOMP_LAUNCHER_AUTOPLAY") != NULL;
+    const char *keys_test = getenv("LARECOMP_LAUNCHER_KEYS");
+    if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     static const float bg[4] = {0.08f, 0.08f, 0.10f, 1};
 
     while (!play) {
         menu_apply_window_requests(win);
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
+            if (bind_capture_event(&e)) continue;  // (waiting for a new key: the press is the binding's)
             ImGui_ImplSDL3_ProcessEvent(&e);
             if (e.type == SDL_EVENT_QUIT) exit(0);
         }
         if (!vk_frame_begin(bg)) { SDL_Delay(16); continue; }
+        if (keys_test && strchr(keys_test, ':') && frame == 5) {  // "<slot>:<key name>": the key pressed for the test
+            SDL_Event k = {};
+            k.type = SDL_EVENT_KEY_DOWN;
+            k.key.scancode = SDL_GetScancodeFromName(strchr(keys_test, ':') + 1);
+            k.key.down = true;
+            SDL_PushEvent(&k);
+        }
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -74,6 +155,8 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::Combo("Resolução", &res, res_names, 5);
         if (ImGui::Checkbox("Tela cheia", &full)) SDL_SetWindowFullscreen(win, full);
         ImGui::Checkbox("Suavizar serrilhado", &smaa);
+        if (keys_test) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        if (ImGui::CollapsingHeader("Teclado e mouse")) keys_section();
         ImGui::PopItemWidth();
         ImGui::Spacing();
         if (frame == 0) ImGui::SetKeyboardFocusHere();
