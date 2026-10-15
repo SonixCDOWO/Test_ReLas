@@ -20,6 +20,7 @@ static uint64_t stat_draws, stat_skipped, stat_passes, stat_dispatches, stat_wai
 // Skipped draws by reason (logged with the stats): 0 no program bound, 1 program still compiling, 2 program failed,
 // 3 no program object, 4 primitive mode, 5 pipeline still building, 6 pipeline failed.
 static uint64_t stat_skip_why[8];
+uint64_t g_skin_watch;  // (debug, LARECOMP_DUMP_SKIN: a vertex cbuf watched across frames)
 #define SKIP(why) (stat_skipped++, stat_skip_why[(why) & 7]++)
 static uint64_t stat_upload_bytes;
 // LARECOMP_VK_PROF=1: render-thread time per category in the fps log (exec = whole command lists, draw = draw(),
@@ -553,6 +554,10 @@ const char *renderer_stats(void) {
              (unsigned long long)stat_dispatches, (unsigned long long)stat_flushes, (double)stat_wait_ns / 1e6,
              atomic_exchange(&stat_compiles, 0), (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
     stat_feedback_copies = stat_upload_bytes = 0;
+    if (g_skin_watch) {
+        const uint32_t *w = (const uint32_t *)(uintptr_t)g_skin_watch;
+        LOG("[skin] cb3 %llx now: row8 %08x %08x row9 %08x %08x\n", (unsigned long long)g_skin_watch, w[32], w[33], w[36], w[37]);
+    }
     if (stat_skipped) {
         size_t n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, " [skip: noprog %llu compiling %llu failed %llu noobj %llu mode %llu pipe-building %llu pipe-failed %llu]",
@@ -979,7 +984,11 @@ static void translate_program(void *arg) {
     maxwell_gmem_size = HEAP_MAX;
     pthread_mutex_lock(&translate_lock);
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
-    if (p->vi->msl) {
+    if (p->vi->msl && !p->code[1]) {  // vertex-only program (see get_program): an empty fragment shader
+        p->fi = calloc(1, sizeof *p->fi);
+        p->fi->stage = STAGE_FRAGMENT;
+        p->fi->msl = strdup("#version 460\nvoid main() {}\n");
+    } else if (p->vi->msl) {
         p->fkey.vs_out_mask = p->vi->out_mask;
         p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[1], p->cmax[1], STAGE_FRAGMENT, &p->fkey);
     }
@@ -1027,7 +1036,16 @@ static void bind_program_stages(NvnProgram *p, uint32_t mask) {
 }
 
 static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
-    if (!(np->stage_mask & 1) || !(np->stage_mask & 2)) return NULL;
+    // A vertex shader without a fragment shader (Let's Go's depth / shadow passes: stages 0x1) gets an empty fragment
+    // shader in translate_program - no color output, only depth, as the hardware does. They were all skipped.
+    if (!(np->stage_mask & 1)) {
+        static uint32_t seen;
+        if (np->stage_mask < 32 && !(seen & (1u << np->stage_mask))) {
+            seen |= 1u << np->stage_mask;
+            LOG("[shader] draw with stages %#x (needs vertex + fragment): skipped\n", np->stage_mask);
+        }
+        return NULL;
+    }
     uint64_t h = 0xcbf29ce484222325ull;
     for (int i = 0; i < 2; i++) { uint64_t a = np->stages[i].code_addr; for (int k = 0; k < 8; k++) { h ^= (a >> (k * 8)) & 0xFF; h *= 0x100000001B3ull; } }
     const uint8_t *vb = (const uint8_t *)vkey;
@@ -1118,7 +1136,11 @@ static VkFormat vertex_format(uint32_t f) {
     case 0x3F: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     case 0x40: return VK_FORMAT_E5B9G9R9_UFLOAT_PACK32;
     case 0x51: return VK_FORMAT_R8_UINT;
-    default: return VK_FORMAT_R32G32B32A32_SFLOAT;
+    default: {
+        static uint8_t told[256];
+        if (f < 256 && !told[f]++) LOG("[vk] vertex format %#x unknown: read as RGBA32F\n", f);
+        return VK_FORMAT_R32G32B32A32_SFLOAT;
+    }
     }
 }
 
@@ -1504,6 +1526,19 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if ((si->cbuf_dynamic & (1u << k)) && r.size) size = r.size > 0x10000 ? 0x10000 : r.size;
     if (size > r.size && r.size) size = r.size;
     if (size < 16) size = 16;
+    // LARECOMP_VK_UBO_DIRECT=1: bind the range in place in the imported guest heap, read when the GPU runs - as on
+    // the console. Let's Go computes its bone palettes with compute shaders writing guest memory: a CPU snapshot
+    // taken while recording sees the previous (or no) matrices and skinned models explode.
+    static int direct = -1;
+    if (direct < 0) direct = getenv("LARECOMP_VK_UBO_DIRECT") ? atoi(getenv("LARECOMP_VK_UBO_DIRECT")) : 0;
+    if (direct) {
+        extern bool vk_guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off);
+        VkBuffer gb;
+        VkDeviceSize goff;
+        uint64_t align = g_vk.props.limits.minUniformBufferOffsetAlignment;
+        if (!(r.addr % (align ? align : 256)) && vk_guest_direct(r.addr, size, &gb, &goff))
+            return ubo_span((VkSpan){.buf = gb, .off = goff}, size);
+    }
     // snapshot: later CPU writes must not leak in. Shared by the draws of one submission binding the same range:
     // within a command list nothing writes guest memory (no inline UpdateUniformBuffer: that writes through below
     // and drops the shared copies).
@@ -1536,7 +1571,8 @@ static bool gmem_import(uint64_t size) {
                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = size,
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT};  // (uniforms read in place: cbuf_info)
     VkBuffer buf;
     if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
     vkBindBufferMemory(g_vk.dev, buf, mem, 0);
@@ -1581,6 +1617,9 @@ static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSi
     *buf = gmem_buf;
     *off = addr - HEAP_BASE;
     return true;
+}
+bool vk_guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {  // (cbuf_info, above)
+    return guest_direct(addr, size, buf, off);
 }
 
 static int g_cs_n;  // (compute program table below)
@@ -1860,6 +1899,10 @@ static void draw_(CmdRec *r, bool indexed) {
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
     }
     if (g_debug_frame) debug_draw(pr, r, indexed);
+    else if ((pr->vi->attr_mask >> 11) & 1 && getenv("LARECOMP_LOG_SKIN")) {  // skinned draws (a11: bone indices)
+        static int n;
+        if (n++ % 50 == 0 && n < 1000) debug_draw(pr, r, indexed);
+    }
     resolve_feedback(pr);
     snap_reason = "draw-depthwrite";
     if (st.rt.depth && st.ds[0] && st.ds[1]) snapshots_invalidate(st.rt.depth);
@@ -2245,6 +2288,89 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
     LOG(" | vp %.0f %.0f %.0f %.0f | attrs %#x blend %#x ds %02x%02x%02x poly %02x%02x chmask %08x\n", st.viewport[0][0], st.viewport[0][1],
         st.viewport[0][2], st.viewport[0][3], pr->vi->attr_mask, st.color_state[0], st.ds[0], st.ds[1], st.ds[2], st.poly[0], st.poly[1],
         st.channel_mask);
+    LOG("[draw]   attribs:");  // format / stream / offset per attribute, and the streams' strides
+    for (int i = 0; i < st.nattrib; i++)
+        if ((pr->vi->attr_mask >> i) & 1)
+            LOG(" a%d=f%#x/s%u/+%u", i, st.attrib[i] & 0xFF, (st.attrib[i] >> 8) & 0x1F, st.attrib[i] >> 13);
+    for (int s = 0; s < st.nstream && s < 4; s++) LOG(" | stream%d stride %u", s, st.stream[s][0]);
+    LOG("\n");
+    if (getenv("LARECOMP_DUMP_SKIN") && ((pr->vi->attr_mask >> 11) & 1)) {  // one skinned draw's inputs -> build/skin/
+        static int dumped;
+        if (++dumped == (atoi(getenv("LARECOMP_DUMP_SKIN")) > 1 ? atoi(getenv("LARECOMP_DUMP_SKIN")) : 1)) {  // (the Nth skinned draw)
+            mkdir("build/skin", 0755);
+            char path[256];
+            FILE *f;
+            snprintf(path, sizeof path, "build/skin/info.txt");
+            if ((f = fopen(path, "w"))) {
+                fprintf(f, "vs %llx stride %u\n", (unsigned long long)st.program->stages[0].code_addr, st.stream[0][0]);
+                for (int i = 0; i < st.nattrib; i++)
+                    if ((pr->vi->attr_mask >> i) & 1)
+                        fprintf(f, "attr %d fmt %#x off %u\n", i, st.attrib[i] & 0xFF, st.attrib[i] >> 13);
+                for (int c = 0; c < 18; c++)
+                    if ((pr->vi->cbuf_mask >> (c + 3)) & 1)
+                        fprintf(f, "cb %d size %u\n", c + 3, (unsigned)st.ubuf[0][c].size);
+                fclose(f);
+            }
+            uint64_t vsz = (uint64_t)st.stream[0][0] * 64;
+            if (st.vbuf[0].addr && (f = fopen("build/skin/verts.bin", "wb"))) { fwrite((void *)(uintptr_t)st.vbuf[0].addr, 1, vsz < st.vbuf[0].size ? vsz : st.vbuf[0].size, f); fclose(f); }
+            for (int c = 0; c < 18; c++) {
+                if (!((pr->vi->cbuf_mask >> (c + 3)) & 1) || !st.ubuf[0][c].addr) continue;
+                snprintf(path, sizeof path, "build/skin/cb%d.bin", c + 3);
+                if ((f = fopen(path, "wb"))) { fwrite((void *)(uintptr_t)st.ubuf[0][c].addr, 1, st.ubuf[0][c].size, f); fclose(f); }
+            }
+            {   // compiler constants (cb1) live after the shader code
+                NvnShaderStage *ss = &st.program->stages[0];
+                if (ss->const_offset && (f = fopen("build/skin/cb1.bin", "wb"))) {
+                    fwrite((void *)(uintptr_t)(ss->code_addr + ss->const_offset), 1, ss->const_size ? ss->const_size : 256, f);
+                    fclose(f);
+                }
+            }
+            LOG("[skin] dumped draw inputs of vs %llx to build/skin/\n", (unsigned long long)st.program->stages[0].code_addr);
+            extern uint64_t g_skin_watch;  // (renderer_stats: is this cbuf filled later, by the GPU?)
+            g_skin_watch = st.ubuf[0][0].addr;
+            const uint32_t *w = (const uint32_t *)(uintptr_t)g_skin_watch;
+            LOG("[skin] cb3 %llx at draw: row8 %08x %08x row9 %08x %08x\n", (unsigned long long)g_skin_watch, w[32], w[33], w[36], w[37]);
+        }
+    }
+    if (getenv("LARECOMP_DEBUG_VSCB"))
+        LOG("[draw]   vbuf0 %llx+%llu vbuf1 %llx+%llu\n", (unsigned long long)st.vbuf[0].addr,
+            (unsigned long long)st.vbuf[0].size, (unsigned long long)st.vbuf[1].addr, (unsigned long long)st.vbuf[1].size);
+    if (getenv("LARECOMP_DEBUG_VSCB") && st.vbuf[0].addr) {  // first vertices: bytes of attrs 11 / 12
+        const uint8_t *v = (const uint8_t *)(uintptr_t)st.vbuf[0].addr;
+        uint32_t stride = st.stream[0][0];
+        for (int i = 0; i < 4 && stride; i++) {
+            const uint8_t *p = v + (uint64_t)i * stride;
+            LOG("[draw]   v%d pos %.3f %.3f %.3f", i, ((const float *)p)[0], ((const float *)p)[1], ((const float *)p)[2]);
+            for (int a = 11; a <= 12; a++) {
+                if (!((pr->vi->attr_mask >> a) & 1)) continue;
+                const uint8_t *q = p + (st.attrib[a] >> 13);
+                LOG(" a%d %u %u %u %u", a, q[0], q[1], q[2], q[3]);
+            }
+            LOG("\n");
+        }
+    }
+    for (int c = 0; c < 18 && getenv("LARECOMP_DEBUG_VSCB"); c++) {  // dynamically indexed vertex cbufs (bone palettes)
+        if (!((pr->vi->cbuf_dynamic >> (c + 3)) & 1) || !st.ubuf[0][c].addr) continue;
+        const float *u = (const float *)(uintptr_t)st.ubuf[0][c].addr;
+        LOG("[draw]   vcb%d %llx size %u:", c, (unsigned long long)st.ubuf[0][c].addr, (unsigned)st.ubuf[0][c].size);
+        int n = (int)(st.ubuf[0][c].size / 4), bad = 0, ident = 0;
+        float mx = 0;
+        for (int k = 0; k < n; k++) {
+            float f = u[k];
+            if (f != f || f > 1e6f || f < -1e6f) bad++;
+            else if (fabsf(f) > mx) mx = fabsf(f);
+        }
+        for (int m = 0; m + 16 <= n; m += 16) {
+            bool id = true;
+            for (int k = 0; k < 16; k++) if (u[m + k] != ((k % 5) == 0 ? 1.0f : 0.0f)) id = false;
+            ident += id;
+        }
+        LOG(" floats %d, non-finite/huge %d, max |x| %.4g, identity 4x4 %d of %d | m1:", n, bad, mx, ident, n / 16);
+        for (int k = 16; k < 32 && k < n; k++) LOG(" %.4g", u[k]);
+        LOG(" | m5:");
+        for (int k = 80; k < 96 && k < n; k++) LOG(" %.4g", u[k]);
+        LOG("\n");
+    }
     if (getenv("LARECOMP_DEBUG_DATA")) {  // vertex streams 0-1 and fragment cbufs: the first floats
         for (int s = 0; s < 2; s++) {
             if (!st.vbuf[s].addr) continue;
