@@ -60,6 +60,33 @@ Riscos e incertezas:
 - É trabalho grande e exploratório: semanas, não dias. Mas é a mesma família de técnica que os ports bem-sucedidos
   usam.
 
+## Protótipo (15/10/2026): `LARECOMP_INTERP=1` / `jogar-60fps.bat`
+
+Implementado em `runtime/nvn/vulkan/exec.c` (seção "frame interpolation") e `device.c` (`backend_present`):
+- **Gravação**: as listas de comandos de cada quadro (com um hash do conteúdo), o estado de execução no início do
+  quadro e uma cópia de cada uniform buffer (cbuf 3+) dos estágios de vértice e fragmento. Chave de cada cópia:
+  estágio, binding, programa, vertex buffer 0, parâmetros do draw e a ocorrência dessa chave no quadro.
+- **Reexecução** no present do quadro N: as mesmas listas a partir do estado inicial, pulando o que escreve na memória
+  do jogo (compute, cópias para buffer e de buffer para textura, atualização inline de uniform, syncs, contadores).
+  Cada uniform é a mistura palavra a palavra das cópias de N−1 e N, só para floats normais e sem salto grande (corte de
+  câmera, texturas que rolam); o resto, e draws sem par no quadro anterior, ficam com o valor de N.
+- **Apresentação**: guarda a imagem de N numa cópia, mostra o intermediário e, meio período depois, N.
+- **Segurança**: sem intermediário quando alguma lista mudou desde a execução (o jogo reaproveitou a memória) ou
+  quando o jogo destruiu texturas, pools ou programas no quadro (o estado gravado poderia apontar para eles).
+
+Resultados (Pallet Town, `tools/repro.sh` andando com o analógico):
+- **Funciona**: entre os quadros 1329 e 1330 o cenário anda 12 px; o intermediário está a **6 px** de cada um (medido
+  por alinhamento das imagens). Personagem e Eevee também ficam no meio do caminho; menus aparecem corretos.
+- **Estável**: 2.000 quadros sem erro, sem avisos da validação do Vulkan; intermediário em ~99% dos quadros; a lógica
+  continua a 30 fps (o custo de GPU dobra: cada quadro é desenhado duas vezes).
+- **Defeitos conhecidos**: uma linha branca fina perto de uma porta no intermediário (provavelmente duas peças de
+  geometria, uma com par e outra sem); atraso de meio quadro (~17 ms) a mais.
+- **Não testado**: batalhas, cenas, efeitos com partículas e compute, sombras de objetos que surgem/somem.
+
+Para testar: `jogar-60fps.bat`, ou `LARECOMP_INTERP=1` + `LARECOMP_WINDOW_SHOT=<frame>` (grava `build/window_mid.png`,
+o intermediário, e `build/window.png`, o quadro). O `LARECOMP_SHOT_AT` grava a imagem do jogo depois da reexecução,
+ou seja, o intermediário.
+
 ## Fontes
 - Ship of Harkinian, interpolação: [frame_interpolation.cpp](https://github.com/HarbourMasters/Shipwright/blob/develop/soh/soh/frame_interpolation.cpp)
 - RT64: [repositório](https://github.com/rt64/rt64) e [comandos estendidos (rt64_extended_gbi.h)](https://github.com/rt64/rt64/blob/main/include/rt64_extended_gbi.h)

@@ -45,6 +45,8 @@ _Atualizado em 15/10/2026._
    - Conclusão: 60 fps na velocidade certa não sai de um patch. Os caminhos seriam gerar quadros intermediários
      (interpolação no runtime, sem vetores de movimento do jogo: artefatos, principalmente na interface) ou um
      programa externo de geração de quadros. Pesquisa das técnicas usadas por outros ports: [PESQUISA-60FPS.md](PESQUISA-60FPS.md).
+   - **Protótipo de interpolação funcionando** (`jogar-60fps.bat` / `LARECOMP_INTERP=1`): reexecuta cada quadro com os
+     uniforms misturados e mostra o intermediário. Validado andando na Pallet Town; batalhas e cenas ainda não.
 
 ## Correções no runtime (resumo)
 | Área | Correção | Arquivo |
