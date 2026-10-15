@@ -25,6 +25,7 @@ mkdir -p build/test-save "build/repro/$name" logs build/frames
 cp -r save/* build/test-save/
 
 last=${shots##*,}
+start=$(date +%s)
 (   # the game itself is this background process (exec, no env wrapper): its Windows pid is the one killed below
     export LARECOMP_INPUT="400:A:6,500:A:6,1000:A:6,1100:A:6" LARECOMP_NO_USER_INPUT=1 \
         LARECOMP_SAVE_DIR=build/test-save LARECOMP_NO_AUDIO=1 LARECOMP_SHOT_AT="$shots"
@@ -52,6 +53,11 @@ if [ -n "${RENDERDOC:-}" ]; then  # the capture is written in the background: wa
 fi
 winpid=$(cat "/proc/$pid/winpid" 2>/dev/null || true)
 if [ -n "$winpid" ]; then taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true; else kill "$pid" 2>/dev/null || true; fi
+# The runtime re-executes itself when the guest address range is taken (runtime/main.c reserve_guest_space): the game
+# is then outside the killed tree. Stop the copies of this exe started since this test began - never older ones (the
+# player's game).
+exe_win=$(cygpath -w "$(realpath "${EXE:-./build/lasrecomp.exe}")")
+powershell.exe -NoProfile -Command "\$t = [DateTimeOffset]::FromUnixTimeSeconds($start).LocalDateTime; Get-CimInstance Win32_Process -Filter \"Name='lasrecomp.exe'\" | Where-Object { \$_.ExecutablePath -eq '$exe_win' -and \$_.CreationDate -ge \$t } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1 || true
 wait "$pid" 2>/dev/null || true
 cp build/frames/*.png "build/repro/$name/" 2>/dev/null || true
 FFMPEG=ffmpeg ./.venv/Scripts/python tools/contact_sheet.py "build/repro/$name/contact.png" build/repro/"$name"/frame_*.png >/dev/null
