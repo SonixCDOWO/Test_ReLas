@@ -25,7 +25,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | Variável | Efeito |
 |---|---|
 | `LARECOMP_SHOT_AT=<frame>,...` | salva o quadro do jogo em `build/frames/frame_N.png` |
-| Estatística a cada 2 s (`[vk] t=...`) | draws, passes, dispatches, uploads, `compile N (translate X ms, spirv Y ms)` (programas e pipelines prontos e o tempo de CPU para traduzir e compilar) e `[skip: ...]` com os draws pulados por motivo |
+| Estatística a cada 2 s (`[vk] t=...`) | draws, passes, dispatches, uploads, `compile N (translate, spirv, pipelines, draws waited)` (programas e pipelines prontos, o tempo de CPU de cada etapa e quanto os draws esperaram por eles). Para medir uma primeira visita, renomeie `cache/` antes do teste e devolva depois e `[skip: ...]` com os draws pulados por motivo |
 | `tools/perf_summary.py [log]` | resumo de uma sessão: faixa de fps, quadros acima de 50 ms, draws pulados, compilações, underruns de áudio (padrão: `logs/jogo.log`) |
 | `LARECOMP_VK_VALIDATION=1` + `VK_ADD_LAYER_PATH=C:\msys64\ucrt64\bin` | camada de validação do Vulkan (achou o overflow das texturas do vídeo) |
 | `LARECOMP_VK_DEVLOST_TRACE=1` (+ `LARECOMP_SYNC_SUBMIT=1`) | últimas operações da GPU antes de um device lost |

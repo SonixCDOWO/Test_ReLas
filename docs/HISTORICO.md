@@ -164,6 +164,11 @@ de sombra: fora da especificação, mas a GPU NVIDIA compara o canal vermelho co
 | 27 | Supersampling (1440p / 4K numa tela menor) reduzido com um só tap bilinear, que pula texels | sem limite de fps, gameplay a ~160 fps em 1080p, ~115 em 1440p e ~78 em 4K (RTX 3080): 4K numa tela 1080p sobra para 30 fps | a apresentação usa 4 taps bilineares espalhados na área de cada pixel da janela (em 2x exato, a média 2x2) | `runtime/nvn/vulkan/shaders.c` |
 | 28 | Texturas borradas em ângulo rasante (caminhos, grama ao fundo) | o jogo pede pouca ou nenhuma filtragem anisotrópica | 16x nos amostradores com mipmap e filtro linear (`LARECOMP_ANISO`) | `runtime/nvn/vulkan/textures.c` |
 | 29 | Objetos surgindo alguns quadros depois de cada leva de shaders novos | ~20-60 draws pulados por leva na gameplay; com cache, ~1 ms por programa | o draw espera o programa / pipeline ficar pronto, até 20 ms por quadro (a 30 fps sobram ~27 ms), em vez de ser pulado: zero draws pulados na gameplay, fps igual; os que sobram ficam na tela de carregamento (`LARECOMP_SHADER_WAIT_MS`) | `runtime/nvn/vulkan/exec.c` |
+| 30 | Primeira visita a uma área: shaders prontos devagar | cache vazio (pasta `cache/` afastada): tradução ~240 ms numa thread só, enquanto as 16 threads de compilação esperavam; depois disso, o que pesa é o driver criando pipelines (~30 ms cada) | a tradução roda nas threads de trabalho (o buffer de strings `RSC2` do tradutor passou a ser por thread) e compila em seguida na mesma thread. Mesmo com cache vazio, toda a preparação cai nos quadros pretos do carregamento: a área aparece completa (prints da transição) | `runtime/nvn/maxwell/translate.c`, `runtime/nvn/vulkan/exec.c` |
+
+O que sobra numa primeira vez: um objeto nunca visto antes (Pokémon ou efeito novo) no meio da gameplay pode surgir 1-2
+quadros depois, porque o driver leva ~30 ms para criar o pipeline e a espera por quadro é de 20 ms. Da segunda vez em
+diante, o cache resolve.
 
 Sombras: em 4K as bordas já saem suaves (o jogo filtra as sombras); um mapa maior que 2048² traria pouco e mexeria na
 escala de alvos que não são 16:9 - fica de fora. Física e lógica rodam o código do próprio jogo, recompilado: o

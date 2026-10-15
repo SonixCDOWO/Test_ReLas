@@ -38,7 +38,7 @@ uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
 #define PROF_ADD(v) do { if (prof) v += SDL_GetTicksNS() - prof_t0_; } while (0)
 static _Atomic int stat_compiles;
-static _Atomic uint64_t stat_translate_ns, stat_spirv_ns;  // CPU time translating / compiling programs
+static _Atomic uint64_t stat_translate_ns, stat_spirv_ns, stat_pipe_ns;  // CPU time translating / compiling programs
 static uint64_t stat_shader_wait_ns;  // draws waiting for their program / pipeline (wait_built)
 static _Atomic int new_pipes;  // pipelines created since the pipeline cache was last saved
 static uint64_t op_counts[CMD_COUNT];
@@ -435,40 +435,9 @@ static bool sync_shaders(void) {
     return v;
 }
 
-// Shader translation: one dedicated thread (the translator isn't re-entrant - translate.c's RSC2 string ring - and
-// translating on the game thread cost up to ~90 ms per frame on entering an area). Compiles go on to the workers.
-static pthread_mutex_t translate_lock = PTHREAD_MUTEX_INITIALIZER;  // (compute shaders translate on the game thread)
-static Job *tjobs_head, *tjobs_tail;
-static pthread_mutex_t tjobs_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t tjobs_cond = PTHREAD_COND_INITIALIZER;
-static void *translator(void *a) {
-    (void)a;
-    for (;;) {
-        pthread_mutex_lock(&tjobs_lock);
-        while (!tjobs_head) pthread_cond_wait(&tjobs_cond, &tjobs_lock);
-        Job *j = tjobs_head;
-        tjobs_head = j->next;
-        if (!tjobs_head) tjobs_tail = NULL;
-        pthread_mutex_unlock(&tjobs_lock);
-        j->fn(j->arg);
-        free(j);
-    }
-    return NULL;
-}
-static bool sync_shaders(void);
-static void run_translate(void (*fn)(void *), void *arg) {
-    if (sync_shaders()) { fn(arg); return; }
-    static bool started;
-    if (!started) { started = true; pthread_t t; pthread_create(&t, NULL, translator, NULL); }
-    Job *j = malloc(sizeof *j);
-    j->fn = fn; j->arg = arg; j->next = NULL;
-    pthread_mutex_lock(&tjobs_lock);
-    if (tjobs_tail) tjobs_tail->next = j; else tjobs_head = j;
-    tjobs_tail = j;
-    pthread_cond_signal(&tjobs_cond);
-    pthread_mutex_unlock(&tjobs_lock);
-}
-
+// Shader translation runs on the workers too, then compiles on the same worker (translate_program). It had one
+// dedicated thread (the translator used a static string ring, now per thread): on a first visit, ~380 programs took
+// ~240 ms one after another while the workers idled. Off the game thread either way (up to ~90 ms per frame there).
 static void run_job(void (*fn)(void *), void *arg) {
     if (sync_shaders()) { fn(arg); return; }
     static bool started;
@@ -573,10 +542,10 @@ const char *renderer_stats(void) {
         LOG("\n");
     }
     snprintf(stats_text, sizeof stats_text,
-             "%llu draws, %llu skipped, %llu passes, %llu dispatches, %llu flushes, wait %.0fms, compile %d (translate %.0fms, spirv %.0fms, draws waited %.0fms), fbcopy %llu, upload %.1fMB",
+             "%llu draws, %llu skipped, %llu passes, %llu dispatches, %llu flushes, wait %.0fms, compile %d (translate %.0fms, spirv %.0fms, pipelines %.0fms, draws waited %.0fms), fbcopy %llu, upload %.1fMB",
              (unsigned long long)stat_draws, (unsigned long long)stat_skipped, (unsigned long long)stat_passes,
              (unsigned long long)stat_dispatches, (unsigned long long)stat_flushes, (double)stat_wait_ns / 1e6,
-             atomic_exchange(&stat_compiles, 0), atomic_exchange(&stat_translate_ns, 0) / 1e6, atomic_exchange(&stat_spirv_ns, 0) / 1e6,
+             atomic_exchange(&stat_compiles, 0), atomic_exchange(&stat_translate_ns, 0) / 1e6, atomic_exchange(&stat_spirv_ns, 0) / 1e6, atomic_exchange(&stat_pipe_ns, 0) / 1e6,
              stat_shader_wait_ns / 1e6,
              (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
     stat_feedback_copies = stat_upload_bytes = stat_shader_wait_ns = 0;
@@ -1025,7 +994,6 @@ static void translate_program(void *arg) {
     Prog *p = arg;
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
-    pthread_mutex_lock(&translate_lock);
     uint64_t t0 = SDL_GetTicksNS();
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
     // Experiment X4 (docs/PLANO-3D.md), LARECOMP_VK_SKIN_ONEBONE=1: skinned vertex shaders see 100% weight on the
@@ -1089,7 +1057,6 @@ static void translate_program(void *arg) {
         p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[1], p->cmax[1], STAGE_FRAGMENT, &p->fkey);
     }
     atomic_fetch_add(&stat_translate_ns, SDL_GetTicksNS() - t0);
-    pthread_mutex_unlock(&translate_lock);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
         atomic_store(&p->state, 2);
@@ -1103,7 +1070,7 @@ static void translate_program(void *arg) {
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
     save_glsl(p->vi->msl, p->code[0], "vs");
     save_glsl(p->fi->msl, p->code[1], "fs");
-    run_job(compile_program, p);
+    compile_program(p);  // (this worker: queued again it would wait behind the other translations)
 }
 
 #define PROG_TAB 4096
@@ -1161,7 +1128,7 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     }
     p->vkey = *vkey;
     p->fkey = *fkey;
-    run_translate(translate_program, p);
+    run_job(translate_program, p);
     return p;
 }
 
@@ -1433,7 +1400,9 @@ static void build_pipeline(void *arg) {
                                        .pStages = stages, .pVertexInputState = &vi, .pInputAssemblyState = &ia, .pViewportState = &vs,
                                        .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &ds,
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = k->prog->layout};
+    uint64_t tp = SDL_GetTicksNS();
     VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &pp->pipe);
+    atomic_fetch_add(&stat_pipe_ns, SDL_GetTicksNS() - tp);
     if (r != VK_SUCCESS) {
         static int n;
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
@@ -1898,9 +1867,7 @@ static CsProg *compute_program(NvnProgram *np) {
     maxwell_gmem_size = HEAP_MAX;
     ShaderKey k = {0};
     k.glsl = 1;
-    pthread_mutex_lock(&translate_lock);
     cp->si = maxwell_translate((const uint8_t *)(uintptr_t)ss->code_addr, ss->const_offset ? ss->const_offset : 0x10000, STAGE_COMPUTE, &k);
-    pthread_mutex_unlock(&translate_lock);
     cp->p.vi = cp->si;
     if (!cp->si->msl) {
         LOG("[compute] translate failed: %s (code %llx)\n", cp->si->error, (unsigned long long)ss->code_addr);
