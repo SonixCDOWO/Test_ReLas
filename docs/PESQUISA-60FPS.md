@@ -1,6 +1,7 @@
 # Pesquisa: como outros ports chegaram a 60 fps
 
-_15/10/2026. Contexto: o Let's Go avança a lógica um passo por quadro e não tem passo de tempo global
+_15/10/2026. **O protótipo descrito abaixo foi removido do runtime no mesmo dia** (erros visuais demais: ver o fim
+da seção do protótipo); o jogo fica nos 30 fps originais. Esta página fica como registro. Contexto: o Let's Go avança a lógica um passo por quadro e não tem passo de tempo global
 ([PROGRESSO.md](PROGRESSO.md), item 5). Destravar o limite deixa o jogo em velocidade dobrada._
 
 ## As quatro técnicas que existem
@@ -86,6 +87,13 @@ Resultados (Pallet Town, `tools/repro.sh` andando com o analógico):
 Para testar: escolher 60 fps no launcher (`larecomp.ini`: `fps = 60`), ou `LARECOMP_INTERP=1` + `LARECOMP_WINDOW_SHOT=<frame>` (grava `build/window_mid.png`,
 o intermediário, e `build/window.png`, o quadro). O `LARECOMP_SHOT_AT` grava a imagem do jogo depois da reexecução,
 ou seja, o intermediário.
+
+### Por que foi removido
+Testando na rota, no mato, na cidade e na captura (gravando o quadro intermediário e os vizinhos, quadro a quadro) os
+erros vinham um atrás do outro: objetos iguais (canteiros, Pidgeys) pareados com o vizinho errado viravam fantasmas;
+menus da captura em branco; modelos com esqueleto esticados; um clarão sobre a Poké Ball. Cada um tinha correção
+(pareamento um a um por conteúdo, só desenhos 3D, sem paletas de ossos, limiar relativo), mas sempre aparecia outro
+caso - sem as marcações por objeto que o RT64 recebe dos patches do jogo, o casamento entre quadros é um palpite.
 
 ## Fontes
 - Ship of Harkinian, interpolação: [frame_interpolation.cpp](https://github.com/HarbourMasters/Shipwright/blob/develop/soh/soh/frame_interpolation.cpp)

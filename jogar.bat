@@ -1,5 +1,5 @@
 @echo off
-rem Roda o Pokemon Let's Go Eevee recompilado: abre o launcher (resolucao, FPS, tela cheia) e depois o jogo.
+rem Roda o Pokemon Let's Go Eevee recompilado: abre o launcher (resolucao, tela cheia) e depois o jogo.
 rem Roda a copia estavel em build\jogo (tools/publicar_jogo.sh), ou build\lasrecomp.exe se ela nao existir.
 rem O log vai para logs\jogo.log. Opcao avancada (antes de rodar):  set LARECOMP_NPAD=right
 cd /d "%~dp0"

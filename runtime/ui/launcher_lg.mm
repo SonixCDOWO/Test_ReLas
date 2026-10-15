@@ -1,6 +1,6 @@
-// Let's Go Recomp start screen: resolution, frame rate, fullscreen, Play - nothing else. Replaces LASRecomp's start
+// Let's Go Recomp start screen: resolution, fullscreen, Play - nothing else. Replaces LASRecomp's start
 // screen (launcher.mm: Link's Awakening's randomizer, seeds, update check, game-file setup) on Windows / Linux; macOS
-// keeps the old one. The choices go to larecomp.ini (settings.c: render_height, fps, fullscreen).
+// keeps the old one. The choices go to larecomp.ini (settings.c: render_height, fullscreen).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
 // LARECOMP_LAUNCHER_AUTOPLAY=1 plays at once.
 #include <SDL3/SDL.h>
@@ -49,8 +49,7 @@ extern "C" void launcher_lg_run(const char *root) {
 
     static const char *const res_names[] = {"Automática (tamanho da janela)", "720p", "1080p", "1440p", "4K"};
     static const int res_lines[] = {0, 720, 1080, 1440, 2160};
-    static const char *const fps_names[] = {"30 fps (original)", "60 fps (interpolado, experimental)"};
-    int res = 0, fps = g_settings.fps == 60 ? 1 : 0;
+    int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
     bool full = g_settings.fullscreen;
     long shot_at = getenv("LARECOMP_LAUNCHER_SHOT") ? atol(getenv("LARECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
@@ -73,7 +72,6 @@ extern "C" void launcher_lg_run(const char *root) {
                                             ImGuiWindowFlags_NoSavedSettings);
         ImGui::PushItemWidth(420);
         ImGui::Combo("Resolução", &res, res_names, 5);
-        ImGui::Combo("FPS", &fps, fps_names, 2);
         if (ImGui::Checkbox("Tela cheia", &full)) SDL_SetWindowFullscreen(win, full);
         ImGui::PopItemWidth();
         ImGui::Spacing();
@@ -89,7 +87,6 @@ extern "C" void launcher_lg_run(const char *root) {
         if (shot) exit(0);
     }
     g_settings.res_height = res_lines[res];
-    g_settings.fps = fps ? 60 : 30;
     g_settings.fullscreen = full;
     settings_save();
     vk_imgui_backend_shutdown();

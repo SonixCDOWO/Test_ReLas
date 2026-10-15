@@ -42,8 +42,8 @@ make build/lasrecomp.exe    # compila o runtime
 ```
 
 ## Jogar
-Dê dois cliques em `jogar.bat` (o log vai para `logs\jogo.log`). Ele abre o launcher (resolução, FPS — 30 original ou
-60 por interpolação, experimental — e tela cheia, salvos no `larecomp.ini`) e depois o jogo, usando a cópia estável
+Dê dois cliques em `jogar.bat` (o log vai para `logs\jogo.log`). Ele abre o launcher (resolução e tela cheia, salvos no
+`larecomp.ini`) e depois o jogo, usando a cópia estável
 em `build/jogo/`, que `tools/publicar_jogo.sh` atualiza a partir do build atual. Ou, no Git Bash (`--play` pula o
 launcher):
 ```

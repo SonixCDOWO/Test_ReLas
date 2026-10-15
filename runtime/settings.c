@@ -19,7 +19,6 @@ static const char *settings_file(void) {
 Settings g_settings = {
     .aspect = ASPECT_UNLOCKED,
     .fullscreen = false,
-    .fps = 30,
     .volume = 1.0f,
     .reverb = true,
     .movie_audio = true,
@@ -50,7 +49,6 @@ void settings_load(void) {
         }
         if (!strcmp(key, "aspect")) g_settings.aspect = !strcmp(val, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
         else if (!strcmp(key, "fullscreen")) g_settings.fullscreen = atoi(val) != 0;
-        else if (!strcmp(key, "fps")) g_settings.fps = atoi(val) == 60 ? 60 : 30;
         else if (!strcmp(key, "render_height")) g_settings.res_height = atoi(val) >= 360 && atoi(val) <= 4320 ? atoi(val) : 0;
         else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
         else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
@@ -102,7 +100,6 @@ void settings_save(void) {
     fprintf(f, "# " RT_APP_NAME " settings (edited from the in-game menu: F1, Esc, or Minus+Plus on a controller)\n");
     fprintf(f, "aspect = %s\n", g_settings.aspect == ASPECT_ORIGINAL ? "original" : "unlocked");
     fprintf(f, "fullscreen = %d\n", g_settings.fullscreen);
-    fprintf(f, "fps = %d\n", g_settings.fps);
     fprintf(f, "render_height = %d\n", g_settings.res_height);
     fprintf(f, "volume = %.2f\n", g_settings.volume);
     fprintf(f, "reverb = %d\n", g_settings.reverb);

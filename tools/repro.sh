@@ -27,7 +27,7 @@ cp -r save/* build/test-save/
 last=${shots##*,}
 start=$(date +%s)
 (   # the game itself is this background process (exec, no env wrapper): its Windows pid is the one killed below
-    export LARECOMP_INPUT="400:A:6,500:A:6,1000:A:6,1100:A:6" LARECOMP_NO_USER_INPUT=1 \
+    export LARECOMP_INPUT="400:A:6,500:A:6,1150:A:6,1300:A:6" LARECOMP_NO_USER_INPUT=1 \
         LARECOMP_SAVE_DIR=build/test-save LARECOMP_NO_AUDIO=1 LARECOMP_SHOT_AT="$shots"
     for kv in "$@"; do export "$kv"; done
     if [ -n "${RENDERDOC:-}" ]; then  # under RenderDoc: LARECOMP_RENDERDOC_AT=<frame> picks the frame (build/rdc/)

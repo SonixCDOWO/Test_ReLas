@@ -483,21 +483,6 @@ void backend_present(NvnTexture *t) {
     vk_end_pass();
     static const float black[4] = {0, 0, 0, 1};
     uint64_t t0 = SDL_GetTicksNS();
-    // Frame interpolation (LARECOMP_INTERP=1, exec.c vk_interp_render): the in-between image now, this frame's own
-    // half a frame later (the period: the game's present rhythm, smoothed).
-    TexBackend *hold = NULL;
-    extern bool vk_interp_render(TexBackend *b, TexBackend **hold);
-    bool two = vk_interp_render(b, &hold);
-    static uint64_t last_present, period = 33333333;
-    if (last_present && t0 - last_present > 5000000 && t0 - last_present < 100000000) period = (period * 7 + (t0 - last_present)) / 8;
-    last_present = t0;
-    for (int image = two ? 0 : 1; image < 2; image++) {
-    bool final = image == 1;
-    if (final && two) {
-        uint64_t due = t0 + period / 2, now = SDL_GetTicksNS();
-        if (due > now) SDL_DelayPrecise(due - now);
-        b = hold;
-    }
     bool have = vk_frame_begin(black);
     uint64_t nd = SDL_GetTicksNS() - t0;
     if (nd > 30000000) {
@@ -532,17 +517,15 @@ void backend_present(NvnTexture *t) {
         if ((long)total_frames >= hide) vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv);
         static long menu_at = -1;
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
-        if (final && menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
+        if (menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
-        // (the in-between image: build/window_mid.png, with LARECOMP_INTERP)
         bool shot = win_shot && (long)total_frames + 1 == win_shot;
-        vk_frame_end(shot ? (final ? "build/window.png" : "build/window_mid.png") : NULL);
-        if (final && shot && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
+        vk_frame_end(shot ? "build/window.png" : NULL);
+        if (shot && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else {
         renderer_submit();
-    }
     }
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);

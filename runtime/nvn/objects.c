@@ -188,9 +188,7 @@ NVN(nvnMemoryPoolInitialize) {
     SET_HOST(A(0), p);
     RET(1);
 }
-// Objects the game destroys (frame interpolation, exec.c: a recorded frame that may reference them is not replayed)
-uint64_t g_nvn_destroyed;
-NVN(nvnMemoryPoolFinalize) { g_nvn_destroyed++; free(HOST(NvnPool, A(0))); SET_HOST(A(0), 0); }
+NVN(nvnMemoryPoolFinalize) { free(HOST(NvnPool, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnMemoryPoolSetDebugLabel) { (void)c; }
 NVN(nvnMemoryPoolMap) { RET(HOST(NvnPool, A(0))->storage); }
 NVN(nvnMemoryPoolGetBufferAddress) { RET(HOST(NvnPool, A(0))->storage); }  // GPU address == CPU address
@@ -365,7 +363,6 @@ NVN(nvnTextureInitialize) {
     RET(1);
 }
 NVN(nvnTextureFinalize) {
-    g_nvn_destroyed++;
     NvnTexture *t = HOST(NvnTexture, A(0));
     if (t) { backend_texture_destroyed(t); free(t); }
     SET_HOST(A(0), 0);
@@ -560,7 +557,7 @@ NvnDescPool *nvn_find_pool(NvnDescPool **reg, uint64_t guest_pool) {
 
 // ================================================================== programs
 NVN(nvnProgramInitialize) { SET_HOST(A(0), calloc(1, sizeof(NvnProgram))); RET(1); }
-NVN(nvnProgramFinalize) { g_nvn_destroyed++; free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
+NVN(nvnProgramFinalize) { free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnProgramSetDebugLabel) { (void)c; }
 NVN(nvnProgramSetSampleShading) { (void)c; }
 NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
@@ -605,10 +602,7 @@ NVN(nvnWindowBuilderSetDevice) { G(uint64_t, A(0), 0) = A(1); }
 NVN(nvnWindowBuilderSetDefaults) { memset(AP(0) + 8, 0, 0x20); G(uint32_t, A(0), 0x20) = 1; }
 NVN(nvnWindowBuilderSetNativeWindow) { G(uint64_t, A(0), 8) = A(1); }
 NVN(nvnWindowBuilderSetTextures) { G(uint32_t, A(0), 0x10) = (uint32_t)A(1); G(uint64_t, A(0), 0x18) = A(2); }
-NVN(nvnWindowBuilderSetPresentInterval) {
-    G(uint32_t, A(0), 0x20) = (uint32_t)A(1);
-    if (getenv("LARECOMP_LOG_INTERVAL")) LOG("[nvn] WindowBuilderSetPresentInterval %llu (lr %llx)\n", (unsigned long long)A(1), (unsigned long long)c->x[30]);
-}
+NVN(nvnWindowBuilderSetPresentInterval) { G(uint32_t, A(0), 0x20) = (uint32_t)A(1); }
 NVN(nvnWindowBuilderSetNumActiveTextures) { G(uint32_t, A(0), 0x24) = (uint32_t)A(1); }
 NVN(nvnWindowBuilderGetDevice) { RET(G(uint64_t, A(0), 0)); }
 NVN(nvnWindowBuilderGetNativeWindow) { RET(G(uint64_t, A(0), 8)); }
@@ -639,21 +633,7 @@ NVN(nvnWindowGetNumTextures) { RET(WIN->num); }
 NVN(nvnWindowGetNumActiveTextures) { RET(WIN->active); }
 NVN(nvnWindowSetNumActiveTextures) { WIN->active = (int)A(1); }
 NVN(nvnWindowGetPresentInterval) { RET(WIN->interval); }
-NVN(nvnWindowSetPresentInterval) {
-    WIN->interval = (int)A(1);
-    if (getenv("LARECOMP_LOG_INTERVAL")) {  // (the game's frame-rate setting: who sets it - guest frame-pointer chain)
-        LOG("[nvn] WindowSetPresentInterval %llu (lr %llx) callers:", (unsigned long long)A(1), (unsigned long long)c->x[30]);
-        uint64_t fp = c->x[29];
-        for (int i = 0; i < 12 && fp >= 0x7000000000ull && fp < 0x7800000000ull && !(fp & 7); i++) {
-            LOG(" %llx", (unsigned long long)((uint64_t *)(uintptr_t)fp)[1]);
-            fp = ((uint64_t *)(uintptr_t)fp)[0];
-        }
-        // (Let's Go main loop, 0x7000029e80: interval = clamp(config[+8] / (*G - 1), 1, 5), G at *0x70015fb438 =
-        // 16666667 ns, one 60 Hz vsync - docs/PROGRESSO.md, 60 fps)
-        const uint64_t *g = *(const uint64_t **)(uintptr_t)0x70015fb438ull;
-        LOG(" | G = %lld\n", g ? (long long)*g : 0);
-    }
-}
+NVN(nvnWindowSetPresentInterval) { WIN->interval = (int)A(1); }
 NVN(nvnWindowSetCrop) { int *cr = WIN->crop; cr[0] = (int)A(1); cr[1] = (int)A(2); cr[2] = (int)A(3); cr[3] = (int)A(4); }
 NVN(nvnWindowGetCrop) { memcpy(AP(1), WIN->crop, 16); }
 NVN(nvnWindowAcquireTexture) {
@@ -693,52 +673,6 @@ static void present_pace(int interval) {
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
-    static uint64_t watch = ~0ull, presents;  // LARECOMP_WATCH64=<guest addr>: its int64 every 30 presents (debug)
-    if (watch == ~0ull) watch = getenv("LARECOMP_WATCH64") ? strtoull(getenv("LARECOMP_WATCH64"), NULL, 0) : 0;
-    presents++;
-    if (watch && presents % 30 == 1)
-        LOG("[watch] present %llu: %llx = %lld\n", (unsigned long long)presents, (unsigned long long)watch, (long long)*(const int64_t *)(uintptr_t)watch);
-    static const char *scan = (const char *)1;  // LARECOMP_SCAN_F32=<value>:<tolerance>:<present>: float32s near value
-    if (scan == (const char *)1) scan = getenv("LARECOMP_SCAN_F32");  // in main's data/bss and the heap, at that present
-    if (scan) {
-        float v = 0, tol = 0;
-        unsigned long at = 0;
-        if (sscanf(scan, "%f:%f:%lu", &v, &tol, &at) == 3 && presents == at) {
-            extern uint64_t kernel_heap_size(void);
-            const uint64_t ranges[2][2] = {{0x7001527000ull, 0x7001ee1000ull}, {0x7240000000ull, 0x7240000000ull + kernel_heap_size()}};
-            int found = 0;
-            for (int r = 0; r < 2; r++)
-                for (uint64_t a = ranges[r][0]; a + 4 <= ranges[r][1] && found < 20000; a += 4) {
-                    float f = *(const float *)(uintptr_t)a;
-                    if (f >= v - tol && f <= v + tol) { LOG("[scan] %llx = %.9g\n", (unsigned long long)a, f); found++; }
-                }
-            LOG("[scan] %d hits\n", found);
-        }
-    }
-    static const char *dump = (const char *)1;  // LARECOMP_DUMP_F32=<file of hex addresses>:<present>: their float32s
-    if (dump == (const char *)1) dump = getenv("LARECOMP_DUMP_F32");
-    if (dump) {
-        const char *colon = strrchr(dump, ':');
-        if (colon && colon > dump + 1 && presents == strtoull(colon + 1, NULL, 10)) {
-            char path[512];
-            snprintf(path, sizeof path, "%.*s", (int)(colon - dump), dump);
-            FILE *f = fopen(path, "r");
-            char line[64];
-            while (f && fgets(line, sizeof line, f)) {
-                uint64_t a = strtoull(line, NULL, 16);
-                if (a >= 0x7000000000ull && a < 0x7800000000ull)
-                    LOG("[dump] %llx = %.9g (%08x)\n", (unsigned long long)a, *(const float *)(uintptr_t)a, *(const uint32_t *)(uintptr_t)a);
-            }
-            if (f) fclose(f);
-        }
-    }
-    static const char *poke = (const char *)1;  // LARECOMP_POKE64=<guest addr>=<value>: written before every present (experiments)
-    if (poke == (const char *)1) poke = getenv("LARECOMP_POKE64");
-    if (poke) {
-        char *eq;
-        uint64_t pa = strtoull(poke, &eq, 0);
-        if (*eq == '=' && pa >= 0x7000000000ull) *(int64_t *)(uintptr_t)pa = strtoll(eq + 1, NULL, 0);
-    }
     present_pace(w->interval);
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
 }
