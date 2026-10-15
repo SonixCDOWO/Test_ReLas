@@ -107,3 +107,33 @@ um a um. Até lá, fica só como referência (licença do HWDER não declarada: 
 ## Critério de pronto
 Personagens e Pokémon renderizados corretamente no quarto, em Pallet Town e numa batalha, sem regressão no cenário,
 no vídeo e na interface, e o problema documentado no histórico.
+
+---
+
+## Resultados (15/10/2026)
+
+### Fase 0: reprodução determinística ✅
+`tools/repro.sh <nome> <frames> [VAR=valor ...]` carrega uma cópia do save (`build/test-save`), ignora o controle real
+(`LARECOMP_NO_USER_INPUT` agora também ignora o *polling* do controle) e chega ao gameplay (Rota 1) em ~1150 frames.
+Cada teste leva ~55 s. Mosaico das capturas: `tools/contact_sheet.py`.
+
+### Fase 1 e além
+| Exp. | O que muda na GPU | Resultado | Conclusão |
+|---|---|---|---|
+| X1 | dump do `cb3` no gameplay | câmera preenchida, igual antes/depois da GPU | **H2 descartada** (câmera ok) |
+| X2 | paleta = identidade | modelos inteiros | caminho mundo → câmera → tela ok; soma dos pesos ≈ 1 |
+| X3 | uniforms lidos direto da memória (27.246 vezes) | continua explodido | não é momento da cópia (**H1 por timing descartada**) |
+| X4 | peso 100% no 1º osso | modelos inteiros | 1º índice (`a11.x`) e 1ª matriz ok |
+| X5 | shader traduzido na **CPU** com dados reais | pesos reais ≈ um osso (dif. máx. 0,002) | **tradução correta (H3 descartada)** |
+| X6 | todos os slots com `a11.x`, pesos reais | explodido | (ver X14: outros shaders usam outros atributos) |
+| X8 | soma dos pesos no 1º osso | modelos inteiros | pesos somam 1 na GPU |
+| X9 | `w.x` no 1º, `1−w.x` no 2º osso | explodido | o 2º osso está errado |
+| X11 | shaderc com otimização | sem mudança | não é o compilador de shaders |
+| X13 | peso 100% no **2º** osso (índice real `a11.y`) | **muito explodido** | o 2º índice está errado na GPU |
+| X14 | 50/50 entre 1º e 2º slot, **ambos com `a11.x`** | **modelos corretos** | a conta do 2º slot está certa; o problema é o **valor de `a11.y` na GPU** |
+
+### Conclusão atual
+O shader e os dados em memória estão certos. **O componente `y` (e provavelmente `z`/`w`) dos índices de osso
+(`a11`, formato RGBA8 UINT) chega errado na GPU**, enquanto o `x` chega certo. A causa está no caminho do atributo de
+vértice até o Vulkan (formato, offset, stride ou buffer). Próximo passo: **RenderDoc** (Fase 3) para ver os valores
+de `a11` por vértice como a GPU os lê e compará-los com a memória.

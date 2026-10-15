@@ -52,7 +52,14 @@ static void recompute_keyboard(void) {
 // Controller buttons (and the triggers as buttons) -> Switch buttons through g_bind_pad; the sticks stay the sticks.
 static void recompute_pad(void) {
     uint32_t host = test_pad;
-    if (pad && !host_test) {
+    // Scripted runs ignore the real controller: its state is polled here, not only through events, so the event
+    // filter alone (input_user_blocked) let the player's controller drive a test instance (non-deterministic runs).
+    static int user_off = -1;
+    if (user_off < 0) {
+        const char *v = getenv("LARECOMP_NO_USER_INPUT");
+        user_off = v ? atoi(v) != 0 : getenv("LARECOMP_INPUT") != NULL;
+    }
+    if (pad && !host_test && !user_off) {
         for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
             if (SDL_GetGamepadButton(pad, (SDL_GamepadButton)i)) host |= 1u << i;
         if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) host |= 1u << PADB_LTRIGGER;
@@ -62,7 +69,7 @@ static void recompute_pad(void) {
     for (int i = 0; i < BIND_PAD_COUNT; i++)
         if (g_bind_pad[i] >= 0 && g_bind_pad[i] < PADB_HOST_COUNT && (host >> g_bind_pad[i] & 1)) b |= 1ull << i;
     pad_buttons = b;
-    if (!pad || host_test) { pad_lx = test_lx, pad_ly = test_ly, pad_rx = pad_ry = 0; return; }
+    if (!pad || host_test || user_off) { pad_lx = test_lx, pad_ly = test_ly, pad_rx = pad_ry = 0; return; }
     pad_lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
     pad_ly = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
     pad_rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX);

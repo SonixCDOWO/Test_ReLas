@@ -21,6 +21,9 @@ static uint64_t stat_draws, stat_skipped, stat_passes, stat_dispatches, stat_wai
 // 3 no program object, 4 primitive mode, 5 pipeline still building, 6 pipeline failed.
 static uint64_t stat_skip_why[8];
 uint64_t g_skin_watch;  // (debug, LARECOMP_DUMP_SKIN: a vertex cbuf watched across frames)
+// docs/PLANO-3D.md experiments, logged with the stats: [0] palettes replaced by identity, [1] skinned-draw cbufs
+// read in place (UBO_DIRECT), [2] skinned-draw cbufs UBO_DIRECT could not place (copied), [3] one-bone shaders.
+static uint64_t g_exp_count[4];
 #define SKIP(why) (stat_skipped++, stat_skip_why[(why) & 7]++)
 static uint64_t stat_upload_bytes;
 // LARECOMP_VK_PROF=1: render-thread time per category in the fps log (exec = whole command lists, draw = draw(),
@@ -554,6 +557,12 @@ const char *renderer_stats(void) {
              (unsigned long long)stat_dispatches, (unsigned long long)stat_flushes, (double)stat_wait_ns / 1e6,
              atomic_exchange(&stat_compiles, 0), (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
     stat_feedback_copies = stat_upload_bytes = 0;
+    if (g_exp_count[0] | g_exp_count[1] | g_exp_count[2] | g_exp_count[3]) {
+        LOG("[exp] skin identity %llu, ubo direct %llu, ubo copied %llu, one-bone shaders %llu\n",
+            (unsigned long long)g_exp_count[0], (unsigned long long)g_exp_count[1], (unsigned long long)g_exp_count[2],
+            (unsigned long long)g_exp_count[3]);
+        g_exp_count[0] = g_exp_count[1] = g_exp_count[2] = 0;  // ([3]: a running total)
+    }
     if (g_skin_watch) {
         const uint32_t *w = (const uint32_t *)(uintptr_t)g_skin_watch;
         LOG("[skin] cb3 %llx now: row8 %08x %08x row9 %08x %08x\n", (unsigned long long)g_skin_watch, w[32], w[33], w[36], w[37]);
@@ -984,6 +993,56 @@ static void translate_program(void *arg) {
     maxwell_gmem_size = HEAP_MAX;
     pthread_mutex_lock(&translate_lock);
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
+    // Experiment X4 (docs/PLANO-3D.md), LARECOMP_VK_SKIN_ONEBONE=1: skinned vertex shaders see 100% weight on the
+    // first bone (a12 = bone weights) - rigid, but whole, if the first bone's matrix reaches the GPU correctly.
+    // Experiment X6, LARECOMP_VK_SKIN_IDX_X=1: every bone slot uses the first bone index (a11.x), weights unchanged.
+    if (p->vi->msl && getenv("LARECOMP_VK_SKIN_IDX_X") && strstr(p->vi->msl, "in uvec4 a11;")) {
+        const char *d = strstr(p->vi->msl, "in uvec4 a11;"), *m = strstr(p->vi->msl, "void main() {");
+        if (d && m && d < m) {
+            static const char def[] = "#define a11 uvec4(a11_in.x, a11_in.x, a11_in.x, a11_in.x)\n";
+            size_t len = strlen(p->vi->msl), pd = (size_t)(d - p->vi->msl) + strlen("in uvec4 a11"), pm = (size_t)(m - p->vi->msl);
+            char *s = malloc(len + 16 + sizeof def), *o = s;
+            memcpy(o, p->vi->msl, pd); o += pd;
+            memcpy(o, "_in", 3); o += 3;                       // in uvec4 a11_in;
+            memcpy(o, p->vi->msl + pd, pm - pd); o += pm - pd;
+            memcpy(o, def, sizeof def - 1); o += sizeof def - 1;
+            memcpy(o, p->vi->msl + pm, len - pm + 1);
+            p->vi->msl = s;
+            g_exp_count[3]++;
+        }
+    }
+    // Experiments X8+, LARECOMP_VK_SKIN_W="<GLSL vec4 expression of a12_in>": the bone weights a skinned vertex shader
+    // sees, rewritten (a12_in = the weights as the GPU fetched them).
+    if (p->vi->msl && getenv("LARECOMP_VK_SKIN_W") && strstr(p->vi->msl, "in vec4 a12;")) {
+        const char *d = strstr(p->vi->msl, "in vec4 a12;"), *m = strstr(p->vi->msl, "void main() {");
+        if (d && m && d < m) {
+            char def[512];
+            snprintf(def, sizeof def, "#define a12 (%s)\n", getenv("LARECOMP_VK_SKIN_W"));
+            size_t dl = strlen(def), len = strlen(p->vi->msl), pd = (size_t)(d - p->vi->msl) + strlen("in vec4 a12"),
+                   pm = (size_t)(m - p->vi->msl);
+            char *s = malloc(len + 16 + dl), *o = s;
+            memcpy(o, p->vi->msl, pd); o += pd;
+            memcpy(o, "_in", 3); o += 3;                       // in vec4 a12_in;
+            memcpy(o, p->vi->msl + pd, pm - pd); o += pm - pd;
+            memcpy(o, def, dl); o += dl;
+            memcpy(o, p->vi->msl + pm, len - pm + 1);
+            p->vi->msl = s;
+            g_exp_count[3]++;
+        }
+    }
+    if (p->vi->msl && getenv("LARECOMP_VK_SKIN_ONEBONE") && strstr(p->vi->msl, "in vec4 a12;")) {
+        const char *m = strstr(p->vi->msl, "void main() {");
+        if (m) {
+            static const char def[] = "#define a12 vec4(1.0, 0.0, 0.0, 0.0)\n";
+            size_t pre = (size_t)(m - p->vi->msl), len = strlen(p->vi->msl);
+            char *s = malloc(len + sizeof def);
+            memcpy(s, p->vi->msl, pre);
+            memcpy(s + pre, def, sizeof def - 1);
+            memcpy(s + pre + sizeof def - 1, m, len - pre + 1);
+            p->vi->msl = s;  // (the translator's string is kept: it lives as long as the program)
+            g_exp_count[3]++;
+        }
+    }
     if (p->vi->msl && !p->code[1]) {  // vertex-only program (see get_program): an empty fragment shader
         p->fi = calloc(1, sizeof *p->fi);
         p->fi->stage = STAGE_FRAGMENT;
@@ -1526,9 +1585,20 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if ((si->cbuf_dynamic & (1u << k)) && r.size) size = r.size > 0x10000 ? 0x10000 : r.size;
     if (size > r.size && r.size) size = r.size;
     if (size < 16) size = 16;
-    // LARECOMP_VK_UBO_DIRECT=1: bind the range in place in the imported guest heap, read when the GPU runs - as on
-    // the console. Let's Go computes its bone palettes with compute shaders writing guest memory: a CPU snapshot
-    // taken while recording sees the previous (or no) matrices and skinned models explode.
+    bool skinned_vs = stage == 0 && ((si->attr_mask >> 11) & 1);  // (Let's Go: a11 = bone indices)
+    // Experiment X2 (docs/PLANO-3D.md), LARECOMP_VK_SKIN_IDENTITY=1: a skinned vertex shader's dynamically indexed
+    // cbuf (its bone palette) reads identity matrices - models in their bind pose if the rest of the chain is right.
+    static int skin_identity = -1;
+    if (skin_identity < 0) skin_identity = getenv("LARECOMP_VK_SKIN_IDENTITY") != NULL;
+    if (skin_identity && skinned_vs && (si->cbuf_dynamic & (1u << k))) {
+        static float ident[0x10000 / 4];
+        if (ident[0] != 1.0f)
+            for (int m = 0; m < 0x10000 / 64; m++) ident[m * 16] = ident[m * 16 + 5] = ident[m * 16 + 10] = ident[m * 16 + 15] = 1.0f;
+        g_exp_count[0]++;
+        return ubo_span(vk_transient_copy(ident, size, 256), size);
+    }
+    // LARECOMP_VK_UBO_DIRECT=1 (experiment X3): bind the range in place in the imported guest heap, read when the GPU
+    // runs - as on the console - in case compute shaders write it after this point. Counted: direct vs copied.
     static int direct = -1;
     if (direct < 0) direct = getenv("LARECOMP_VK_UBO_DIRECT") ? atoi(getenv("LARECOMP_VK_UBO_DIRECT")) : 0;
     if (direct) {
@@ -1536,8 +1606,11 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
         VkBuffer gb;
         VkDeviceSize goff;
         uint64_t align = g_vk.props.limits.minUniformBufferOffsetAlignment;
-        if (!(r.addr % (align ? align : 256)) && vk_guest_direct(r.addr, size, &gb, &goff))
+        if (!(r.addr % (align ? align : 256)) && vk_guest_direct(r.addr, size, &gb, &goff)) {
+            if (skinned_vs) g_exp_count[1]++;
             return ubo_span((VkSpan){.buf = gb, .off = goff}, size);
+        }
+        if (skinned_vs) g_exp_count[2]++;
     }
     // snapshot: later CPU writes must not leak in. Shared by the draws of one submission binding the same range:
     // within a command list nothing writes guest memory (no inline UpdateUniformBuffer: that writes through below
@@ -1899,9 +1972,16 @@ static void draw_(CmdRec *r, bool indexed) {
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
     }
     if (g_debug_frame) debug_draw(pr, r, indexed);
-    else if ((pr->vi->attr_mask >> 11) & 1 && getenv("LARECOMP_LOG_SKIN")) {  // skinned draws (a11: bone indices)
+    else if ((pr->vi->attr_mask >> 11) & 1) {  // skinned draws (a11: bone indices)
         static int n;
-        if (n++ % 50 == 0 && n < 1000) debug_draw(pr, r, indexed);
+        static int64_t dump_frame = -2;  // LARECOMP_DUMP_SKIN_FRAME: dump the first one from that frame on
+        if (dump_frame == -2) dump_frame = getenv("LARECOMP_DUMP_SKIN_FRAME") ? atoll(getenv("LARECOMP_DUMP_SKIN_FRAME")) : -1;
+        if (dump_frame >= 0 && renderer_present_count() >= (uint64_t)dump_frame) {
+            debug_draw(pr, r, indexed);  // (debug_draw writes build/skin/ once)
+            dump_frame = -1;
+        } else if (getenv("LARECOMP_LOG_SKIN") && n++ % 50 == 0 && n < 1000) {
+            debug_draw(pr, r, indexed);
+        }
     }
     resolve_feedback(pr);
     snap_reason = "draw-depthwrite";
@@ -2296,7 +2376,9 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
     LOG("\n");
     if (getenv("LARECOMP_DUMP_SKIN") && ((pr->vi->attr_mask >> 11) & 1)) {  // one skinned draw's inputs -> build/skin/
         static int dumped;
-        if (++dumped == (atoi(getenv("LARECOMP_DUMP_SKIN")) > 1 ? atoi(getenv("LARECOMP_DUMP_SKIN")) : 1)) {  // (the Nth skinned draw)
+        const char *at_frame = getenv("LARECOMP_DUMP_SKIN_FRAME");  // (the first one from that frame on)
+        if (at_frame ? renderer_present_count() >= (uint64_t)atoll(at_frame) && !dumped++
+                     : ++dumped == (atoi(getenv("LARECOMP_DUMP_SKIN")) > 1 ? atoi(getenv("LARECOMP_DUMP_SKIN")) : 1)) {  // (or the Nth skinned draw)
             mkdir("build/skin", 0755);
             char path[256];
             FILE *f;
