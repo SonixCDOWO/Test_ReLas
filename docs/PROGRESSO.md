@@ -21,7 +21,7 @@ _Atualizado em 15/10/2026._
 ## O que falta
 1. **Personagens e Pokémon "explodidos"** (modelos com esqueleto esticados em espinhos). Dados de entrada
    verificados e corretos; investigação em andamento com o harness de shader na CPU. Detalhes em
-   [HISTORICO.md, parte 6](HISTORICO.md#parte-6-o-problema-em-aberto-personagens-explodidos).
+   [HISTORICO.md, parte 6](HISTORICO.md#parte-6-o-problema-em-aberto-personagens-explodidos). Plano: [PLANO-3D.md](PLANO-3D.md).
 2. **Mira por movimento**: o sensor responde sempre "parado". Opção futura: mirar com o analógico direito ou com
    o giroscópio do controle.
 3. **Recursos online** (Pokémon GO, trocas, Poké Ball Plus): desligados de propósito (serviços offline).

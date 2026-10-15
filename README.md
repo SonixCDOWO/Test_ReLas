@@ -15,6 +15,7 @@ Jogável do começo: abertura, introdução, captura do Pikachu, salvar e carreg
 - [docs/PROGRESSO.md](docs/PROGRESSO.md): o que funciona e o que falta
 - [docs/HISTORICO.md](docs/HISTORICO.md): cada problema encontrado, a causa e a correção
 - [docs/DEPURACAO.md](docs/DEPURACAO.md): ferramentas e variáveis de diagnóstico
+- [docs/PLANO-3D.md](docs/PLANO-3D.md): plano para corrigir os modelos 3D com esqueleto
 - [docs/DIAGNOSTICO.md](docs/DIAGNOSTICO.md): módulos do jogo e cobertura do tradutor
 - [docs/ANALISE-LASRecomp.md](docs/ANALISE-LASRecomp.md): análise da base
 
