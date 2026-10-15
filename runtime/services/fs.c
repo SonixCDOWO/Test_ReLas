@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "../hle.h"
+#include "../mods.h"
 #include "../rando.h"
 #include "../ipc.h"
 
@@ -136,9 +137,10 @@ static int64_t dir_lookup(const uint8_t *dm, uint64_t dsz, const char *path) {
 
 static void add_new_files(int fd, const uint64_t *h, const uint8_t *dmeta, uint64_t dsz, uint64_t fsz) {
     const char *seed = rando_seed_dir();
-    if (!seed) return;
     char root[1100];
-    snprintf(root, sizeof root, "%s/romfs", seed);
+    if (seed) snprintf(root, sizeof root, "%s/romfs", seed);
+    else if (mod_romfs_dir()) snprintf(root, sizeof root, "%s", mod_romfs_dir());  // a mod's new files (runtime/mods.h)
+    else return;
     char **known = malloc(sizeof *known * rom_nfiles);
     for (int i = 0; i < rom_nfiles; i++) known[i] = rom_files[i].path;
     qsort(known, rom_nfiles, sizeof *known, path_cmp);
@@ -253,7 +255,8 @@ static void rom_index(int fd) {
     // (in a copy) to point them at data appended past the end of the image; reads there go to host files.
     for (int i = 0; i < rom_nfiles; i++) {
         char host[1200];
-        if (!rando_romfs_override(rom_files[i].path, host, sizeof host)) continue;
+        if (!rando_romfs_override(rom_files[i].path, host, sizeof host) && !mod_romfs_override(rom_files[i].path, host, sizeof host))
+            continue;  // (a randomizer seed's file, or a mod's: runtime/mods.h)
         struct stat sb;
         if (stat(host, &sb)) continue;
         if (!ov_meta) {
@@ -277,7 +280,7 @@ static void rom_index(int fd) {
         ov_n++;
         ov_end = (ov_end + size + 0xF) & ~0xFull;
     }
-    if (ov_n) LOG("[fs] randomizer: %d romfs files replaced\n", ov_n);
+    if (ov_n) LOG("[fs] %s: %d romfs files replaced\n", rando_seed_dir() ? "randomizer" : "mod", ov_n);
     if (ov_meta) { patches[npatches++] = (Patch){ov_meta_off, ov_meta_size, ov_meta}; }
     add_new_files(fd, h, dmeta, dsz, fsz);
     qsort(rom_files, rom_nfiles, sizeof *rom_files, rom_cmp);

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../mods.h"
 #include "../hle.h"
 #include "../ipc.h"
 
@@ -150,7 +151,8 @@ static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
         }
         break;
     case 20: OUT(uint64_t, 0) = 0; resp_size(resp, 8); break;  // EnsureSaveData
-    case 21: memcpy(resp->data, "en-US\0\0\0", 8); resp_size(resp, 8); break;  // GetDesiredLanguage
+    case 21: memset(resp->data, 0, 8); memcpy(resp->data, game_language(), strlen(game_language())); resp_size(resp, 8);  // GetDesiredLanguage
+        LOG("[am] GetDesiredLanguage: %s\n", game_language()); break;
     case 23: memcpy(resp->data, "1.0.0", 6); resp_size(resp, 0x10); break;
     case 40: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;  // NotifyRunning
     case 130: case 140: resp->copy_handles[resp->ncopy++] = new_event(); break;

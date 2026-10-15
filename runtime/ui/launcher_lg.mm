@@ -1,7 +1,7 @@
-// Let's Go Recomp start screen: resolution, fullscreen, anti-aliasing, the keyboard / mouse controls, Play - nothing
-// else. Replaces LASRecomp's start screen (launcher.mm: Link's Awakening's randomizer, seeds, update check, game-file
+// Let's Go Recomp start screen: resolution, fullscreen, anti-aliasing, translation (mods/), the keyboard / mouse
+// controls, Play - nothing else. Replaces LASRecomp's start screen (launcher.mm: Link's Awakening's randomizer, seeds, update check, game-file
 // setup) on Windows / Linux; macOS keeps the old one. The choices go to larecomp.ini (settings.c: render_height,
-// fullscreen, smaa, mouse_sens; bind_key_* from runtime/hle/bindings.c).
+// fullscreen, smaa, mod, mouse_sens; bind_key_* from runtime/hle/bindings.c).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
 // LARECOMP_LAUNCHER_AUTOPLAY=1 plays at once; LARECOMP_LAUNCHER_KEYS=1 opens the keyboard section,
 // LARECOMP_LAUNCHER_KEYS=<slot> also waits for a new key for that input (runtime/input_bind.h BIND_*), and
@@ -19,6 +19,7 @@
 
 extern "C" {
 #include "input_bind.h"
+#include "mods.h"
 #include "paths.h"
 #include "settings.h"
 void settings_save(void);
@@ -123,6 +124,10 @@ extern "C" void launcher_lg_run(const char *root) {
     int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
     bool full = g_settings.fullscreen, smaa = g_settings.antialias == AA_SMAA;
+    // Translation: the folders under mods/ (runtime/mods.h); 0 = none (the game's own English)
+    static char mods[MODS_MAX][128];
+    int nmods = mods_list(mods, MODS_MAX), mod = 0;
+    for (int i = 0; i < nmods; i++) if (!strcmp(mods[i], g_settings.mod)) mod = i + 1;
     long shot_at = getenv("LARECOMP_LAUNCHER_SHOT") ? atol(getenv("LARECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
     bool play = getenv("LARECOMP_LAUNCHER_AUTOPLAY") != NULL;
     const char *keys_test = getenv("LARECOMP_LAUNCHER_KEYS");
@@ -155,6 +160,12 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::Combo("Resolução", &res, res_names, 5);
         if (ImGui::Checkbox("Tela cheia", &full)) SDL_SetWindowFullscreen(win, full);
         ImGui::Checkbox("Suavizar serrilhado", &smaa);
+        if (nmods && ImGui::BeginCombo("Tradução", mod ? mods[mod - 1] : "Nenhuma (inglês)")) {
+            if (ImGui::Selectable("Nenhuma (inglês)", mod == 0)) mod = 0;
+            for (int i = 0; i < nmods; i++)
+                if (ImGui::Selectable(mods[i], mod == i + 1)) mod = i + 1;
+            ImGui::EndCombo();
+        }
         if (keys_test) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
         if (ImGui::CollapsingHeader("Teclado e mouse")) keys_section();
         ImGui::PopItemWidth();
@@ -173,6 +184,7 @@ extern "C" void launcher_lg_run(const char *root) {
     g_settings.res_height = res_lines[res];
     g_settings.fullscreen = full;
     g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
+    snprintf(g_settings.mod, sizeof g_settings.mod, "%s", mod ? mods[mod - 1] : "");
     settings_save();
     vk_imgui_backend_shutdown();
     ImGui_ImplSDL3_Shutdown();

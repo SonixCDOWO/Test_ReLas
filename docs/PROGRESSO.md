@@ -10,6 +10,7 @@ _Atualizado em 15/10/2026._
 |---|---|
 | Boot | completo: 4 módulos, SDK, construtores, threads, serviços do sistema |
 | Controle | gamepad do PC como modo portátil (seleção de controle aceita) |
+| Traduções / mods | pasta `mods/<nome>/` no formato do Atmosphere (LayeredFS): arquivos do romfs trocados ou adicionados, escolhida no launcher ("Tradução"). Testada com a tradução PT-BR de fãs (Pokémon Switch Brasil, v3.1): textos, menus e imagens em português. Instalar: copiar `Atmosphere/titles/0100187003A36000/RomFs` do pacote para `mods/<nome>/romfs` (ou o pacote inteiro em `mods/<nome>/`: a pasta do Eevee é achada sozinha) |
 | Teclado e mouse | WASD anda / mira, Espaço ou Enter = A, Q ou Backspace = B, Tab = X (menu), R = Y, Z / C = L / R, `=` / `-` = Plus / Minus, setas = d-pad. Mouse: clique na janela para prendê-lo; clique esquerdo = A, direito = B, movimento = mira da Poké Ball (giroscópio virtual). Esc solta o mouse (pergunta se quer fechar). As teclas e a sensibilidade do mouse se trocam no launcher ("Teclado e mouse") |
 | Vídeo de abertura | imagem e áudio corretos, 1080p, termina e segue para o jogo |
 | Áudio | música e efeitos (Opus via `hwopus`), áudio dos vídeos sem cortes |

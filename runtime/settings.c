@@ -44,6 +44,12 @@ void settings_load(void) {
         char key[64];
         char val[128];
         if (sscanf(line, " %63[^= ] = %127[^\n]", key, val) < 1) continue;
+        if (!strcmp(key, "game_lang") || !strcmp(key, "mod")) {  // (may be empty)
+            if (sscanf(line, " %63[^= ] = %127[^\n]", key, val) != 2) val[0] = 0;
+            if (key[0] == 'g') strlcpy(g_settings.game_lang, val, sizeof g_settings.game_lang);
+            else strlcpy(g_settings.mod, val, sizeof g_settings.mod);
+            continue;
+        }
         if (!strcmp(key, "rando_seed")) {
             if (sscanf(line, " %63[^= ] = %127[^\n]", key, val) != 2) val[0] = 0;
             strlcpy(g_settings.rando_seed, val, sizeof g_settings.rando_seed);
@@ -138,5 +144,7 @@ void settings_save(void) {
     fprintf(f, "tunic = %s\nhearts = %s\n", g_tunic_colours[g_settings.tunic], g_heart_colours[g_settings.hearts]);
     bind_settings_save(f);
     fprintf(f, "rando_seed = %s\n", g_settings.rando_seed);
+    fprintf(f, "game_lang = %s\n", g_settings.game_lang);
+    fprintf(f, "mod = %s\n", g_settings.mod);
     fclose(f);
 }

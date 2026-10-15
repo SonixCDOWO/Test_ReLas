@@ -1,6 +1,7 @@
 // hid (shared memory, input state filled in later) and settings (set, set:sys).
 #include <string.h>
 
+#include "../mods.h"
 #include "../hle.h"
 #include "../ipc.h"
 
@@ -70,7 +71,8 @@ static void language_list(IpcReq *req, IpcResp *resp, int max) {
 SERVICE("set", set) {
     (void)s;
     switch (req->cmd) {
-    case 0: OUT(uint64_t, 0) = lang_code("en-US"); resp_size(resp, 8); break;      // GetLanguageCode
+    case 0: OUT(uint64_t, 0) = lang_code(game_language()); resp_size(resp, 8);  // GetLanguageCode (launcher / mod)
+        LOG("[set] GetLanguageCode: %s\n", game_language()); break;
     case 1: language_list(req, resp, 15); break;                                   // GetAvailableLanguageCodes
     case 2: {                                                                      // MakeLanguageCode
         uint32_t i = IN(uint32_t, 0);

@@ -51,6 +51,8 @@ typedef struct {
     int tunic;           // index into g_tunic_colours (0 = Default: the game's / the seed's own)
     int hearts;          // index into g_heart_colours (0 = Default red)
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
+    char game_lang[8];     // the game's language code ("en-US", "es"...: runtime/mods.c game_language)
+    char mod[128];         // active mod / fan translation (mods/<name>/), empty = none (runtime/mods.h)
 } Settings;
 
 enum { N_TUNIC_COLOURS = 13, N_HEART_COLOURS = 9 };
