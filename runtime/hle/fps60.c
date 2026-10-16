@@ -111,7 +111,9 @@ bool fps60_enabled(void) { return g_on; }
 bool fps60_world(void) { return g_world; }
 
 // At each present (before its pacing): was this a world frame?
+void fps60_probe_present(void);
 void fps60_present(void) {
+    fps60_probe_present();
     if (getenv("LARECOMP_FPS60_LOG")) log_index();
     if (!g_on) return;
     bool w = !g_special;
@@ -137,4 +139,67 @@ __attribute__((constructor)) static void fps60_init(void) {
     if (!e) return;
     snprintf(buf, sizeof buf, "%s", e);
     for (char *t = strtok(buf, ","); t; t = strtok(NULL, ",")) rt_register_fnhook(strtoull(t, NULL, 16), g1_reader_hook);
+}
+
+// ---- research: LARECOMP_PROBE="<fn addr>[:<bytes>]" ----------------------------------------------------------------
+// At each entry of the function, remember its x0 (object) and, after the original returns, x0 (result): for the next
+// LARECOMP_PROBE_FRAMES (120) presents, compare `bytes` (0x400) of each of them with the previous present and log, at
+// the end, every 32-bit word that changed: how many presents, and its usual step as an integer and as a float. A
+// frame counter shows as an integer stepping by 1 (or a float by a constant) every present of the scene.
+#define PROBE_MAX 4
+static struct { uint64_t base; const char *what; uint32_t prev[0x400 / 4]; uint32_t changed[0x400 / 4]; int32_t step[0x400 / 4]; uint32_t step_n[0x400 / 4]; bool have; } g_probe[PROBE_MAX];
+static int g_nprobe;
+static uint32_t g_probe_bytes = 0x400;
+static uint64_t g_probe_from, g_probe_to;
+static int probe_hook(Cpu *c, uint64_t addr) {
+    uint64_t obj = c->x[0];
+    rt_call_original(c, addr);
+    uint64_t ret = c->x[0];
+    if (!g_probe_from) g_probe_from = renderer_present_count() + 1, g_probe_to = g_probe_from + (getenv("LARECOMP_PROBE_FRAMES") ? atoi(getenv("LARECOMP_PROBE_FRAMES")) : 120);
+    for (int pass = 0; pass < 2 && g_nprobe < PROBE_MAX; pass++) {
+        uint64_t p = pass ? ret : obj;
+        if (p < 0x7000000000ull || p > 0x7800000000ull) continue;
+        g_probe[g_nprobe].base = p, g_probe[g_nprobe].what = pass ? "returned object" : "x0 object";
+        LOG("[probe] f_%llx %s %llx\n", (unsigned long long)addr, g_probe[g_nprobe].what, (unsigned long long)p);
+        g_nprobe++;
+    }
+    return 1;
+}
+void fps60_probe_present(void) {
+    uint64_t f = renderer_present_count();
+    if (!g_probe_from || f < g_probe_from || f > g_probe_to) return;
+    for (int i = 0; i < g_nprobe; i++) {
+        const uint32_t *now = (const uint32_t *)(uintptr_t)g_probe[i].base;
+        for (uint32_t w = 0; w < g_probe_bytes / 4; w++) {
+            if (g_probe[i].have && now[w] != g_probe[i].prev[w]) {
+                g_probe[i].changed[w]++;
+                int32_t d = (int32_t)(now[w] - g_probe[i].prev[w]);
+                if (d == g_probe[i].step[w]) g_probe[i].step_n[w]++;
+                else if (g_probe[i].step_n[w] == 0) g_probe[i].step[w] = d;
+            }
+            g_probe[i].prev[w] = now[w];
+        }
+        g_probe[i].have = true;
+    }
+    if (f == g_probe_to) {
+        for (int i = 0; i < g_nprobe; i++)
+            for (uint32_t w = 0; w < g_probe_bytes / 4; w++) {
+                if (g_probe[i].changed[w] < 5) continue;
+                float fv;
+                memcpy(&fv, &g_probe[i].prev[w], 4);
+                LOG("[probe] %s +0x%03x: changed in %u of %llu presents; usual step %d (%u times) value %u / %g\n", g_probe[i].what, w * 4,
+                    g_probe[i].changed[w], (unsigned long long)(g_probe_to - g_probe_from), g_probe[i].step[w], g_probe[i].step_n[w],
+                    g_probe[i].prev[w], fv);
+            }
+    }
+}
+__attribute__((constructor)) static void probe_init(void) {
+    const char *e = getenv("LARECOMP_PROBE");
+    if (!e) return;
+    char buf[128];
+    snprintf(buf, sizeof buf, "%s", e);
+    char *colon = strchr(buf, ':');
+    if (colon) *colon = 0, g_probe_bytes = (uint32_t)strtoul(colon + 1, NULL, 16);
+    if (g_probe_bytes > 0x400) g_probe_bytes = 0x400;
+    rt_register_fnhook(strtoull(buf, NULL, 16), probe_hook);
 }
