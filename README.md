@@ -17,6 +17,10 @@ engine.
 
 *Português: [veja a seção em português](#português) no fim, com o passo a passo da tradução PT-BR.*
 
+[![Watch the showcase video on YouTube](docs/shots/video.jpg)](https://youtu.be/mGk-wBu1wCk)
+
+*▶ [Showcase video](https://youtu.be/mGk-wBu1wCk) (6 min): launcher, Play with Eevee, a capture, a rival battle, menus.*
+
 ![Viridian City at 1080p](docs/viridian.jpg)
 
 | | |
