@@ -9,6 +9,10 @@ This project is built on the runtime and recompiler of **[LAS Recomp](https://gi
 Peiikai, the static recompilation of *The Legend of Zelda: Link's Awakening*, adapted here to a different game
 engine.
 
+**Highlights:** up to **4K** internal resolution (supersampled on smaller screens) · **SMAA** anti-aliasing (the
+original has none) · **16x anisotropic filtering** · the game's own **30 fps**, locked and stable · keyboard, mouse
+and any controller · fan translations in one click.
+
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Pokémon: Let's Go, Eevee!*
 > **version 1.0.0**, extracted (the `exefs` and `romfs` folders). This repository does not provide the game, its
@@ -23,18 +27,23 @@ engine.
 
 ![Viridian City at 1080p](docs/viridian.jpg)
 
-| | |
-|---|---|
-| ![Catching a wild Bellsprout](docs/shots/catch.jpg) | ![A trainer battle on Route 1](docs/shots/battle.jpg) |
-| Catching a wild Pokémon (aimed with the mouse or a stick) | Trainer battle on Route 1 |
-| ![Feeding Eevee in Play with Eevee](docs/shots/eevee.jpg) | ![The menu with the Brazilian Portuguese fan translation](docs/shots/ptbr.jpg) |
-| Play with Eevee (the touch screen, with mouse or controller) | With the Brazilian Portuguese fan translation |
+<table>
+<tr>
+<td><img src="docs/shots/catch.jpg" alt="Catching a wild Bellsprout"><br>Catching a wild Pokémon (aimed with the mouse or a stick)</td>
+<td><img src="docs/shots/battle.jpg" alt="A trainer battle on Route 1"><br>Trainer battle on Route 1</td>
+</tr>
+<tr>
+<td><img src="docs/shots/eevee.jpg" alt="Feeding Eevee in Play with Eevee"><br>Play with Eevee (the touch screen, with mouse or controller)</td>
+<td><img src="docs/shots/ptbr.jpg" alt="The menu with the Brazilian Portuguese fan translation"><br>With the Brazilian Portuguese fan translation</td>
+</tr>
+</table>
 
 *Screenshots of this port running on Windows (game rendered at 1280x720, captured straight from the renderer).*
 
 ## Contents
 - [Status](#status)
 - [Requirements](#requirements)
+- [Supported game version](#supported-game-version)
 - [How to play](#how-to-play)
 - [Features](#features)
 - [Controls](#controls)
@@ -62,32 +71,51 @@ start to finish yet: see [What was tested](#what-was-tested).
 | | Minimum |
 |---|---|
 | OS | Windows 10 or 11, 64-bit |
-| CPU | x86-64 with **AVX2** (Intel Haswell / 4th gen Core, AMD Ryzen or newer); checked at startup |
-| GPU | **Vulkan 1.3** driver (NVIDIA GTX 900 series, AMD RX 400 series, Intel Arc or newer), up to date |
-| RAM | 8 GB (16 GB recommended for the one-time game code build) |
-| Disk | about 8 GB free (a copy of the game files plus the game code built from them) |
-| Game | your own extracted *Pokémon: Let's Go, Eevee!* **v1.0.0** (base game, no update) |
+| CPU | x86-64 with **AVX2, FMA and BMI2** (Intel Haswell / 2013 or newer, AMD Excavator / Zen or newer). Checked at startup, with a message instead of a crash |
+| GPU | a driver with **Vulkan 1.3**: GPUs that report less are skipped. AMD lists Vulkan 1.3 for Radeon RX Vega and RDNA cards; for any GPU, [gpuinfo.org](https://vulkan.gpuinfo.org) shows the version its driver reports |
+| RAM | the game used up to **3.8 GB** while playing (peak working set, measured in Viridian City). The one-time setup runs one compiler per CPU thread, fewer when RAM is short. Tested only on a 32 GB machine |
+| Disk | about **6 GB** free: 5.7 GB at the peak of the one-time setup, 4.7 GB afterwards (measured) |
+| Game | your own extracted *Pokémon: Let's Go, Eevee!* **v1.0.0** (base game, no update): see [Supported game version](#supported-game-version) |
 
-Tested on Windows 11 with an Intel Core i5-14600KF, 32 GB of RAM and an NVIDIA GeForce RTX 3080. Other GPUs and vendors have not been tested yet: reports are
-welcome.
+Only tested so far on Windows 11 with an Intel Core i5-14600KF, 32 GB of RAM and an NVIDIA GeForce RTX 3080. Reports
+from other CPUs and GPUs (AMD, Intel) are very welcome.
+
+## Supported game version
+
+The recompiled code is tied to one exact executable, so only this is accepted:
+
+| | Supported | Not supported |
+|---|---|---|
+| Game | *Pokémon: Let's Go, Eevee!*, title id `0100187003A36000` | *Let's Go, Pikachu!* (title id `010003F003A34000`): a separate title, never tested |
+| Version | **1.0.0**, the base game | the 1.0.1 (January 2019) and 1.0.2 (July 2019) updates |
+| Files | the extracted **`exefs`** folder (`main`, `main.npdm`, `rtld`, `sdk`, `subsdk0`, `subsdk1`) and the **`romfs`** folder, or a `romfs.bin` image (both tested) | `.xci`, `.nsp`, `.nsz`, `.xcz` or `.nca` files: extract them first |
+| Region | the same title id is listed in the US, UK, Brazil, Japan, Korea and Hong Kong / Taiwan eShops, with the same two updates for all of them ([titledb](https://github.com/blawar/titledb)). Switch updates are patches over the base game, so every region's 1.0.0 is the same. Tested with one dump, from a cartridge | |
+| Game language | the 9 languages of the game's own language screen, shown when starting a new game: English, Español, Français, Deutsch, Italiano, Japanese, Korean, Simplified and Traditional Chinese (tested). The game warns the choice can't be changed later, and an existing save keeps its language | |
+| Fan translations | Atmosphere / LayeredFS `romfs` packs, such as the Brazilian Portuguese one ([Translations](#translations-and-mods)) | patches that change the executable (`exefs` / IPS patches) |
+| Save data | saves created by this port (`save\save_0\savedata.bin`) | importing a Switch save: untested |
+| Extras | | the Poké Ball Plus, Pokémon GO / GO Park, online play, the second player |
+
+The launcher reads the build id of your `exefs/main` (the 1.0.0 executable's starts with `0A3F0D21E67DAD80`) and
+refuses any other, saying why. If your console has an update installed, dump the base game (the cartridge, or the
+base title rather than the update): an updated `main` has another build id.
 
 ## How to play
 
 1. Download the latest `LetsGoRecomp-<version>-windows.zip` from the [Releases](../../releases) page.
 2. Unzip it into a folder you can write to (for example `D:\Games\LetsGoRecomp`; not inside `Program Files`).
-3. Open **`LetsGoRecomp.exe`**.
+3. Open **`LetsGoRecomp.exe`**. The exe is not code-signed, so the first time Windows may show *"Windows protected
+   your PC"*: click **More info**, then **Run anyway**.
 4. Click **Select game folder...** and choose the folder with your extracted game: the one holding `exefs` and
    `romfs` (a `romfs.bin` image works too), or any folder above it.
 5. The launcher checks the files are *Let's Go, Eevee!* v1.0.0, copies them and **recompiles the game code for your
-   PC**. This happens only once and takes a while: about 16 minutes on a 20-thread Core i5-14600K, longer on
+   PC**. This happens only once and takes a while: about 16 minutes on a 20-thread Core i5-14600KF, longer on
    CPUs with fewer threads. A progress bar shows how far it got.
 6. Click **Play**.
 
 ![The launcher](docs/launcher.png)
 
-Everything stays inside that folder: settings (`larecomp.ini`), saves (`save\`), the game files (`extracted\`),
-translations (`mods\`), shader caches (`cache\`) and the log (`lasrecomp.log`). To back up or move the game, copy the
-folder. Nothing is written to the registry or to your user profile.
+Settings (`larecomp.ini`), saves (`save\`), the game files (`extracted\`), translations (`mods\`), shader caches
+(`cache\`) and the log (`lasrecomp.log`) are all kept in that folder: to back up or move the game, copy the folder.
 
 ## Features
 
@@ -103,8 +131,7 @@ folder. Nothing is written to the registry or to your user profile.
   bindings. In English, or in Brazilian Portuguese when Windows is.
 - **Keyboard and mouse:** all keys can be rebound in the launcher. The mouse aims Poké Balls like the Switch's motion
   controls and acts as your finger on the touch screen.
-- **Controllers:** any controller SDL 3 recognizes (Xbox, PlayStation, Switch Pro, 8BitDo...), with the handheld-mode
-  layout. Play with Eevee works with a controller alone (the right stick moves a virtual finger).
+- **Controllers:** through SDL 3's gamepad support, with the handheld-mode layout (tested with one gamepad so far). Play with Eevee works with a controller alone (the right stick moves a virtual finger).
 - **Translations and mods:** Atmosphere-style LayeredFS mods, installed from the downloaded file with one click.
 
 ## Controls
@@ -137,10 +164,12 @@ Atmosphere LayeredFS packs, and those work as they are:
 2. Pick the file you downloaded (`.zip`, `.rar` or `.7z`, as it came), and the launcher unpacks it and finds the
    `romfs` folder for *Let's Go, Eevee!* (title id `0100187003A36000`) inside it. Packs made for both games are fine.
 3. Choose it under **Translation**. "None (English)" goes back to the original game.
+4. A translation replaces the texts of one or more of the game's languages, so the game has to be in one of them.
+   The Brazilian Portuguese pack replaces English and Spanish: pick English or Español on the game's language screen
+   when starting a new game, or use a save made in one of those.
 
 Installed mods live in `mods\<name>\romfs\`; you can also copy a `romfs` folder there by hand. Files in it replace
-the game's files with the same path, and new files are added. When a translation replaces one language's texts, the
-game is told to use that language automatically.
+the game's files with the same path, and new files are added.
 
 Tested with the Brazilian Portuguese fan translation by **Pokémon Switch Brasil** (see [Português](#português)).
 It is not included in this repository or in the releases; it is distributed by its authors.
@@ -158,7 +187,7 @@ scripted input runs (recorded inputs replayed frame by frame, see [docs/DEPURACA
 | Wild Pokémon capture (aiming with stick, mouse and the virtual motion sensor) | ✅ |
 | Trainer battle (Route 1) | ✅ |
 | Menus, bag, Pokédex, party, box, Pokémon icons | ✅ |
-| Play with Eevee: petting, opening the berry tray, feeding | ✅ with mouse and with controller only |
+| Play with Eevee | ✅ petting with the mouse; the whole berry flow (open the tray, pick a Razz Berry, feed it) with a controller only |
 | Save and load | ✅ (`save\save_0\savedata.bin`) |
 | Music and sound effects | ✅ no crackling or underruns in a 4-minute measured run |
 | Release zip on a clean folder, without any development tools on PATH: game setup, recompiling, playing, installing the translation from the downloaded `.rar` | ✅ |
@@ -249,16 +278,21 @@ runtime implements the Switch's system services, a bit like Wine does for Window
 **Why does it compile the game on my PC?** The game code generated from the game's files is still Nintendo's code,
 so it cannot be distributed. The release ships the tools instead, and builds it from your own copy.
 
-**Can I use my save from the Switch?** Saves are stored as `save\save_0\savedata.bin`, in the same format as the
-game's own save data. Save transfer has not been tested.
+**Can I use my save from the Switch?** Not tested. The port keeps the file the game itself writes, at
+`save\save_0\savedata.bin`, but importing one from a console has never been tried.
 
-**Does it work with Let's Go, Pikachu!?** Not yet. Its executable differs from Eevee's, so the recompiler's
-per-game data has to be redone for it.
+**Does it work with Let's Go, Pikachu!?** Not yet. It is a separate title (`010003F003A34000`) with its own
+executable, which the launcher doesn't accept, and it has never been tested.
 
 **Can I use an updated game (v1.0.1 / v1.0.2)?** No, only the base v1.0.0. The launcher checks this.
 
 **The launcher says the files are packed (.xci / .nsp).** Extract the game's `exefs` and `romfs` first, with your
 usual tool, from your own dump.
+
+**Windows Defender or my antivirus flagged a file.** The bundled game code generator (`lasgen\lasgen.exe`) is a
+Python program packaged with PyInstaller, a format antivirus heuristics sometimes flag by mistake. Everything in the
+release is built from this repository's source by `make dist`. If a file was quarantined, the launcher reports the
+builder as missing: restore it or add the folder as an exception, then select the game folder again.
 
 **Where is the log?** `lasrecomp.log`, next to the exe.
 
@@ -316,9 +350,16 @@ covers this code only and grants no rights to the game.
 recompilação estática, baseado no [LAS Recomp](https://github.com/peiikai/LASRecomp). **Nenhum arquivo do jogo vem
 junto:** você precisa da sua própria cópia, obtida legalmente, extraída (pastas `exefs` e `romfs`).
 
+**Versão aceita:** só o *Let's Go, Eevee!* **1.0.0**, o jogo base, sem atualização (o Pikachu ainda não funciona).
+Cartucho ou eShop de qualquer região: o jogo tem o mesmo title id (`0100187003A36000`) e as mesmas atualizações nas
+lojas dos EUA, Reino Unido, Brasil, Japão, Coreia e Hong Kong / Taiwan.
+Arquivos `.xci` / `.nsp` precisam ser extraídos antes. Detalhes em
+[Supported game version](#supported-game-version).
+
 **Como jogar:** baixe o zip em [Releases](../../releases), descompacte numa pasta sua, abra o `LetsGoRecomp.exe`,
-clique em **Selecionar pasta do jogo...** e escolha a pasta com o jogo extraído. O programa copia os arquivos e
-recompila o código do jogo para o seu PC (só uma vez; uns 16 minutos num i5-14600K, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
+clique em **Selecionar pasta do jogo...** e escolha a pasta com o jogo extraído. Se o Windows mostrar "O Windows
+protegeu o computador" (o exe não tem assinatura digital), clique em **Mais informações** e **Executar assim mesmo**. O programa copia os arquivos e
+recompila o código do jogo para o seu PC (só uma vez; uns 16 minutos num i5-14600KF, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
 abre em português quando o Windows está em português.
 
 ### Jogar em português (tradução PT-BR)
@@ -332,9 +373,11 @@ O jogo não tem português. A tradução de fãs do grupo **Pokémon Switch Bras
    trazem os dois jogos.
 3. Em **Tradução**, escolha a tradução instalada e clique em **Jogar**. Para voltar ao inglês, escolha
    "Nenhuma (inglês)".
+4. A tradução PT-BR substitui os textos em inglês e em espanhol. Num jogo novo, escolha **English** ou **Español** na
+   tela de idioma do próprio jogo (ela avisa que não dá para trocar depois); um save que já está em um desses dois
+   idiomas também aparece em português.
 
-Textos, menus e as imagens traduzidas aparecem em português, e o jogo é configurado sozinho para o idioma que a
-tradução substitui. A tradução **não está incluída** neste repositório nem nas releases: ela é distribuída pelos
+Textos, menus e as imagens traduzidas aparecem em português. A tradução **não está incluída** neste repositório nem nas releases: ela é distribuída pelos
 seus autores, a quem vão todos os créditos. Testada com a versão 3.1 da tradução.
 
 A documentação interna do projeto (histórico de cada correção, depuração, compilação) está em português, na pasta

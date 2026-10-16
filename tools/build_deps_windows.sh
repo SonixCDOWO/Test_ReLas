@@ -2,7 +2,8 @@
 # make deps-windows (MSYS2 UCRT64 shell): what the shipped Windows build links against instead of MSYS2's packages,
 # built from pinned sources into build/deps-win. MSYS2's FFmpeg is a GPLv3 build (x264, x265, xvid, ...); the
 # release uses an LGPL-only FFmpeg with just what the game's movies need - WebM: VP9 video + Vorbis audio, plus
-# VP8 / Opus / H.264 / AAC in WebM or MP4 (the same configuration as tools/build_deps_macos.sh) - and swscale.
+# VP8 / Opus / H.264 / AAC in WebM or MP4 - and swscale. swresample stays: FFmpeg's Opus decoder depends on it (without it
+# configure drops Opus silently, and Let's Go's music and sound effects - hwopus - need it). Checked below.
 # SDL3 (zlib licence) and the compiler runtime DLLs still come from MSYS2.
 # Needs: the packages from tools/setup_windows.ps1 (clang, make, nasm). Skipped when its output exists
 # (delete build/deps-win to redo).
@@ -27,10 +28,14 @@ if [ ! -f "$P/lib/libavcodec.dll.a" ]; then
     (cd "$S/ffmpeg" && ./configure --prefix="$P" --cc=clang --cxx=clang++ --arch=x86_64 --target-os=mingw32 \
         --enable-shared --disable-static \
         --disable-autodetect --disable-programs --disable-doc --disable-network --disable-avdevice --disable-avfilter \
-        --disable-swresample --disable-everything \
+        --disable-everything \
         --enable-protocol=file --enable-demuxer=matroska,mov \
         --enable-decoder=vp9,vp8,vorbis,opus,h264,aac --enable-parser=vp9,vp8,vorbis,opus,h264,aac \
         && make -j"$JOBS" && make install)
 fi
 grep -q 'GPL version 3\|--enable-gpl' "$P/lib/pkgconfig/libavcodec.pc" && { echo "deps-win: FFmpeg is not LGPL"; exit 1; }
+for c in opus vorbis vp9 vp8 h264 aac; do  # (every decoder the game needs, really built: configure drops missing deps quietly)
+    C=$(echo "$c" | tr a-z A-Z)
+    grep -q "^#define CONFIG_${C}_DECODER 1" "$S/ffmpeg/config_components.h" || { echo "deps-win: FFmpeg built without the $c decoder"; exit 1; }
+done
 echo "deps-win: $(ls "$P/bin"/*.dll | xargs -n1 basename | tr '\n' ' ')"

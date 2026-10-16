@@ -7,17 +7,24 @@ Project page, full documentation and source code: https://github.com/raulzrrs/le
 NO GAME FILES ARE INCLUDED. You need your own legally obtained copy of Pokemon: Let's Go, Eevee! version 1.0.0,
 extracted (the exefs and romfs folders).
 
+Supported: Pokemon: Let's Go, Eevee! (title id 0100187003A36000), version 1.0.0 only: the base game, without the
+1.0.1 / 1.0.2 updates. Cartridge or eShop: every region's eShop lists the same title id and updates.
+Not supported yet: Let's Go, Pikachu!.
+Packed files (.xci, .nsp, .nsz, .nca) must be extracted first.
+
 Requirements
 ------------
 - Windows 10 or 11, 64-bit
-- A CPU with AVX2 (Intel 4th gen / AMD Ryzen or newer)
-- A GPU with a Vulkan 1.3 driver (NVIDIA GTX 900 / AMD RX 400 / Intel Arc or newer, up-to-date drivers)
-- About 8 GB of free disk space (the game files are copied here, plus the game code built from them)
+- A CPU with AVX2, FMA and BMI2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or newer); checked at startup
+- A GPU whose driver supports Vulkan 1.3 (GPUs that report less are skipped); see vulkan.gpuinfo.org for yours
+- RAM: the game used up to 3.8 GB while playing (measured). Tested on a 32 GB machine
+- About 6 GB of free disk space (measured: 5.7 GB at the peak of the one-time setup, 4.7 GB afterwards)
 
 How to play
 -----------
 1. Unzip this folder anywhere you can write to (e.g. D:\Games\LetsGoRecomp). Not inside Program Files.
-2. Open LetsGoRecomp.exe.
+2. Open LetsGoRecomp.exe. It is not code-signed: if Windows says "Windows protected your PC", click "More info"
+   and then "Run anyway".
 3. Click "Select game folder..." and pick the folder with your extracted game (the one that holds exefs and romfs,
    or any folder above it).
 4. Wait while the game files are copied and the game code is recompiled for your PC. This happens only once and
@@ -34,7 +41,8 @@ it came; packs made for Atmosphere / LayeredFS work). Then choose it under "Tran
 
 Portugues (Brasil): para jogar em portugues, baixe a traducao PT-BR de fas do grupo Pokemon Switch Brasil, clique em
 "Instalar traducao..." e escolha o arquivo baixado (.rar ou .zip, do jeito que veio). Depois selecione-a em "Traducao".
-O programa abre em portugues quando o Windows esta em portugues.
+A traducao substitui os textos em ingles e espanhol: num jogo novo, escolha English ou Espanol na tela de idioma do
+jogo. O programa abre em portugues quando o Windows esta em portugues.
 
 Controls
 --------
@@ -49,6 +57,8 @@ Troubleshooting
 ---------------
 - "Not Pokemon: Let's Go, Eevee! version 1.0.0": updates are not supported; use the base game files.
 - Packed game files (.xci / .nsp) must be extracted first.
+- "The game code builder is missing": your antivirus may have quarantined lasgen\lasgen.exe (a PyInstaller
+  program, sometimes flagged by mistake). Restore it or add this folder as an exception.
 - The game closes or doesn't start: see lasrecomp.log in this folder and report it on the project page.
 
 Legal

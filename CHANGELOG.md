@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 (2026-10-16)
+
+- **Fixes the game closing right after the controller screen** ("svcBreak") in the 0.1.0 release: its FFmpeg was
+  built without the Opus decoder the game's music and sound effects use. The release build now checks every decoder
+  the game needs, and a missing one is reported by name instead of crashing.
+- The one-time setup's progress bar no longer reaches 100% long before the end (it counted the four game modules as
+  two).
+- The README states exactly which game files and version are supported, with the sources.
+
 ## 0.1.0 (2026-10-15)
 
 First public release.
