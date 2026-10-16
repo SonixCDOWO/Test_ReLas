@@ -604,6 +604,21 @@ void backend_present(NvnTexture *t) {
             if (*next == ',') next++;
         }
     }
+    {   // LARECOMP_SHOT_REL=<n>,<n>,...: the game image n presents after a capture began (fps60.c marks it)
+        extern long fps60_scene_start(void);
+        static const char *rel = (const char *)1;
+        if (rel == (const char *)1) { rel = getenv("LARECOMP_SHOT_REL"); if (rel) mkdir("build/frames", 0755); }
+        long st = rel ? fps60_scene_start() : -1;
+        for (const char *p = rel; st >= 0 && p && *p;) {
+            long n = strtol(p, (char **)&p, 10);
+            if ((long)total_frames == st + n) {
+                char path[256];
+                snprintf(path, sizeof path, "build/frames/rel_%04ld.png", n);
+                renderer_save_texture_tex(b, path);
+            }
+            if (*p == ',') p++;
+        }
+    }
     static long shot_from = -1;
     if (shot_from < 0) { const char *e = getenv("LARECOMP_SCREENSHOT_FROM"); shot_from = e ? atol(e) : 0; }
     if (shot_every && total_frames % shot_every == 0 && (long)total_frames >= shot_from) {

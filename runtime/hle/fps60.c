@@ -33,11 +33,21 @@ uint64_t renderer_present_count(void);
 
 static bool g_on;
 static bool g_world = true;             // 60 fps now (not inside a battle or a capture)
+static bool g_all60;                    // LARECOMP_FPS60=2
 static bool g_special;                  // a battle or a capture started and the world hasn't updated since
 #define ENCOUNTER_SCENE 0x700028ef70ull  // creates the capture scene (x0 = the encounter object)
 #define BATTLE_START 0x700028bb60ull     // copies the battle's configuration
 
+static long g_scene_start = -1;  // research: the present a capture began in (LARECOMP_SHOT_REL)
+long fps60_scene_start(void) { return g_scene_start; }
+static int scene_start_hook(Cpu *c, uint64_t addr) {
+    if (g_scene_start < 0) g_scene_start = (long)renderer_present_count();
+    (void)c, (void)addr;
+    return 0;
+}
+
 static int scene_hook(Cpu *c, uint64_t addr) {
+    if (g_all60) return 0;  // LARECOMP_FPS60=2 (research): battles and captures at 60 too
     g_special = true;
     (void)c, (void)addr;
     return 0;
@@ -124,6 +134,7 @@ void fps60_present(void) {
 __attribute__((constructor)) static void fps60_init(void) {
     const char *e = getenv("LARECOMP_FPS60");
     g_on = e && atoi(e);
+    g_all60 = e && atoi(e) == 2;
     if (g_on) {
         rt_register_fnhook(FIELD_UPDATE, field_hook);
         rt_register_fnhook(ENCOUNTER_SCENE, scene_hook);
@@ -134,6 +145,7 @@ __attribute__((constructor)) static void fps60_init(void) {
         rt_register_fnhook(0x7000663660ull, elapsed_hook);
         rt_register_fnhook(0x7000664cd0ull, elapsed_hook);
     }
+    if (getenv("LARECOMP_SHOT_REL")) rt_register_fnhook(ENCOUNTER_SCENE, scene_start_hook);
     e = getenv("LARECOMP_G1_READERS");
     char buf[512];
     if (!e) return;
