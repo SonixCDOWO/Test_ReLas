@@ -1,13 +1,15 @@
-// 60 fps (experimental): the world at 60, everything else as the game made it (30).
+// 60 fps (experimental): the world and the menus at 60, battles and captures as the game made them (30).
 //
 // The game keeps a table of frame durations G (main+0xf7eeb8: 16.67 ms, 33.33 ms, 50 ms, ...; read through the pointer
 // at main+0x15fb438). The world's update step comes from G[1] through the accessor f_7000039600; menus, battles and
 // captures count their own frames, so at 60 fps they run twice as fast (docs/PESQUISA-60FPS.md). A community "60 FPS"
 // patch changes G[1] for every reader; here:
-//  - while the world is what's running (its update f_70002f8bb0 ran this frame), the world's step is 16.67 ms and the
-//    runtime presents at 60 fps;
-//  - in any other scene (menus, battles, captures, loading) the game's own 33.33 ms and 30 fps.
-// Scenes can be moved from the 30 fps side to the 60 fps side one at a time, once their frame counters are fixed.
+//  - the animation systems take "elapsed time" as a fixed 33.33 ms per update and divide it by G[1] to get frames: the
+//    time the accessor hands out is that elapsed time, so with 16.67 ms there they advance half a frame per update at
+//    60 fps - right, by time (menus, the world's animations);
+//  - battles and captures also count integer frames of their own: they keep the game's 33.33 ms and 30 fps (the entry
+//    points of both scenes, mapped in docs/MODO-BATALHA.md, switch to it until the world's update runs again).
+// Scenes move from the 30 fps side to the 60 fps side one at a time, once their frame counters are fixed.
 //
 // LARECOMP_FPS60=1 turns it on (settings: fps = 60). LARECOMP_G1_READERS="<addr>[,<addr>...]" (research): G[1] is
 // 16.67 ms only while those functions run, to find which readers a speed comes from.
@@ -30,11 +32,19 @@ uint64_t renderer_present_count(void);
 #define G_ACCESSOR 0x7000039600ull    // G[index]: the world's step comes through here
 
 static bool g_on;
-static uint64_t g_field_frame = ~0ull;  // the present count the world last updated in
-static bool g_world;                    // the last present was a world frame
+static bool g_world = true;             // 60 fps now (not inside a battle or a capture)
+static bool g_special;                  // a battle or a capture started and the world hasn't updated since
+#define ENCOUNTER_SCENE 0x700028ef70ull  // creates the capture scene (x0 = the encounter object)
+#define BATTLE_START 0x700028bb60ull     // copies the battle's configuration
+
+static int scene_hook(Cpu *c, uint64_t addr) {
+    g_special = true;
+    (void)c, (void)addr;
+    return 0;
+}
 
 static int field_hook(Cpu *c, uint64_t addr) {
-    g_field_frame = renderer_present_count();
+    g_special = false;
     (void)c, (void)addr;
     return 0;  // (the game's function runs as usual)
 }
@@ -104,8 +114,8 @@ bool fps60_world(void) { return g_world; }
 void fps60_present(void) {
     if (getenv("LARECOMP_FPS60_LOG")) log_index();
     if (!g_on) return;
-    bool w = g_field_frame == renderer_present_count();
-    if (w != g_world) LOG("[fps60] %s from present %llu\n", w ? "world: 60 fps" : "other scene: 30 fps", (unsigned long long)renderer_present_count());
+    bool w = !g_special;
+    if (w != g_world) LOG("[fps60] %s from present %llu\n", w ? "60 fps" : "battle / capture: 30 fps", (unsigned long long)renderer_present_count());
     g_world = w;
 }
 
@@ -114,6 +124,8 @@ __attribute__((constructor)) static void fps60_init(void) {
     g_on = e && atoi(e);
     if (g_on) {
         rt_register_fnhook(FIELD_UPDATE, field_hook);
+        rt_register_fnhook(ENCOUNTER_SCENE, scene_hook);
+        rt_register_fnhook(BATTLE_START, scene_hook);
         rt_register_fnhook(G_ACCESSOR, accessor_hook);
     }
     if (getenv("LARECOMP_ELAPSED_LOG")) {
