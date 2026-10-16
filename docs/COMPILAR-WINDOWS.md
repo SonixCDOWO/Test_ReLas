@@ -18,7 +18,7 @@ Leva por volta de meia hora, quase toda esperando downloads e a compilação.
 No Git Bash, numa pasta com espaço livre (de preferência fora de `Arquivos de Programas`):
 
 ```bash
-git clone https://github.com/raulzito12345rrs/letsgo-recomp.git
+git clone https://github.com/raulzrrs/letsgo-recomp.git
 ```
 
 ## 2. Instalar as ferramentas (uma vez)

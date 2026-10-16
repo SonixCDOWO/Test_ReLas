@@ -2,7 +2,7 @@ Let's Go Recomp
 ===============
 
 A native Windows port of Pokemon: Let's Go, Eevee! (Nintendo Switch, v1.0.0) by static recompilation.
-Project page, full documentation and source code: https://github.com/raulzito12345rrs/letsgo-recomp
+Project page, full documentation and source code: https://github.com/raulzrrs/letsgo-recomp
 
 NO GAME FILES ARE INCLUDED. You need your own legally obtained copy of Pokemon: Let's Go, Eevee! version 1.0.0,
 extracted (the exefs and romfs folders).
