@@ -11,6 +11,9 @@
 #           EXE=./build/jogo/lasrecomp.exe tools/repro.sh jogo 1400   (a cópia de make jogo)
 #           RENDERDOC=1 tools/repro.sh rdc 1300 LARECOMP_RENDERDOC_AT=1290   (captura em build/rdc/)
 #           SAVE="$HOME/Downloads/savedata.bin" tools/repro.sh outro 1400   (outro save, copiado)
+# Turbo (padrão): LARECOMP_FPS=0, sem a trava de 30 fps. A lógica anda um passo por quadro, então os mesmos quadros
+# chegam ~4x mais rápido e os scripts (contados em quadros) valem igual: cenário, câmera e posições saem idênticos; só
+# animações de espera ligadas ao tempo real ficam em outra fase. TURBO=0 volta ao ritmo real (medir fps, áudio).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
@@ -30,6 +33,7 @@ else cp -r "${SAVE:-save}"/* build/test-save/; fi
 last=${shots##*,}
 start=$(date +%s)
 (   # the game itself is this background process (exec, no env wrapper): its Windows pid is the one killed below
+    [ "${TURBO:-1}" = 0 ] || export LARECOMP_FPS=0
     export LARECOMP_INPUT="400:A:6,500:A:6,1150:A:6,1300:A:6" LARECOMP_NO_USER_INPUT=1 \
         LARECOMP_SAVE_DIR=build/test-save LARECOMP_NO_AUDIO=1 LARECOMP_SHOT_AT="$shots"
     for kv in "$@"; do export "$kv"; done

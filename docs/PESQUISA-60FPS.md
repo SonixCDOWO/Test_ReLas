@@ -95,6 +95,27 @@ menus da captura em branco; modelos com esqueleto esticados; um clarão sobre a 
 (pareamento um a um por conteúdo, só desenhos 3D, sem paletas de ossos, limiar relativo), mas sempre aparecia outro
 caso - sem as marcações por objeto que o RT64 recebe dos patches do jogo, o casamento entre quadros é um palpite.
 
+## Investigação de 16/10/2026: identificar cada objeto pelo próprio jogo
+
+O que faltava ao protótipo era saber **qual objeto é qual** entre dois quadros. Achado com `LARECOMP_DRAW_CHAINS` e
+`LARECOMP_HOOK_DUMP` (+ `_FRAMES`), em Viridian, parado e andando (quadros 1450-1460):
+
+- Por quadro o jogo grava 117 listas de comandos, faz ~407 `nvnCommandBufferCallCommands` (listas prontas) e só ~37
+  draws diretos: quase todo objeto é desenhado chamando uma lista gravada antes.
+- 356 dessas chamadas vêm de **`f_70006237b0`**, chamada por item pelo laço de `f_70006453a0`
+  (`... f_7000644b50 → f_70006453a0 → f_70006237b0 → f_70005e3000 → CallCommands`). Ela é chamada 22 vezes por
+  quadro, uma por objeto, com o **objeto em x0**.
+- O ponteiro em x0 é **estável**: os mesmos 22 objetos em 10 quadros seguidos andando, nenhum repetido no quadro.
+- A **ordem muda** a cada quadro (só de 2 a 14 dos 22 ficam na mesma posição): é por isso que parear pela ordem
+  gerava fantasmas.
+- Um segundo caminho, `f_7000641190` (via `f_7000642990`), desenha 7 objetos, cada um em dois passes por quadro
+  (sombra/profundidade e cor): também estáveis; chave = objeto + passe.
+
+Conclusão: com ganchos nessas funções, cada chamada de lista pode levar a identidade do objeto que o jogo está
+desenhando, como os `gEXMatrixGroup` do RT64. O protótipo de interpolação (commit `9f2f5e5`, removido em `d72ab33`)
+pode voltar pareando por objeto em vez de pela ordem; draws sem objeto (interface, efeitos de tela) ficam com os
+valores do quadro atual.
+
 ## Fontes
 - Ship of Harkinian, interpolação: [frame_interpolation.cpp](https://github.com/HarbourMasters/Shipwright/blob/develop/soh/soh/frame_interpolation.cpp)
 - RT64: [repositório](https://github.com/rt64/rt64) e [comandos estendidos (rt64_extended_gbi.h)](https://github.com/rt64/rt64/blob/main/include/rt64_extended_gbi.h)

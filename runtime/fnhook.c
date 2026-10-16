@@ -5,7 +5,8 @@
 //
 // Investigation (docs/MODO-BATALHA.md): LARECOMP_HOOK_DUMP="<addr>:<arg>,<arg>...[;<addr>:...]" logs, the first
 // LARECOMP_HOOK_DUMP_MAX (default 4) times each function is entered, the registers x0..x7 and the memory the args
-// name: "x2:30" = 0x30 bytes at x2, "*x0:400" = 0x400 bytes at the pointer stored at x0.
+// name: "x2:30" = 0x30 bytes at x2, "*x0:400" = 0x400 bytes at the pointer stored at x0. LARECOMP_HOOK_DUMP_FRAMES=
+// <first>-<last> limits it to those presents (the count then starts there).
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,12 +79,17 @@ static void hexdump(const char *what, uint64_t p, uint32_t len) {
     }
 }
 
+static long dump_from = -1, dump_to = -1;  // LARECOMP_HOOK_DUMP_FRAMES=<first>-<last>: only during those presents
+
 static int dump_hook(Cpu *c, uint64_t addr) {
+    extern uint64_t renderer_present_count(void);
+    uint64_t frame = renderer_present_count();
+    if (dump_from >= 0 && ((long)frame < dump_from || (long)frame > dump_to)) return 0;
     for (int i = 0; i < ndumps; i++) {
         Dump *d = &dumps[i];
         if (d->addr != addr || atomic_fetch_add(&d->hits, 1) >= dump_max) continue;
-        LOG("[hook] %llx entered (#%d) from lr %llx: x0 %llx x1 %llx x2 %llx x3 %llx x4 %llx x5 %llx x6 %llx x7 %llx\n",
-            (unsigned long long)addr, d->hits, (unsigned long long)c->x[30], (unsigned long long)c->x[0], (unsigned long long)c->x[1],
+        LOG("[hook] f%llu %llx entered (#%d) from lr %llx: x0 %llx x1 %llx x2 %llx x3 %llx x4 %llx x5 %llx x6 %llx x7 %llx\n",
+            (unsigned long long)frame, (unsigned long long)addr, d->hits, (unsigned long long)c->x[30], (unsigned long long)c->x[0], (unsigned long long)c->x[1],
             (unsigned long long)c->x[2], (unsigned long long)c->x[3], (unsigned long long)c->x[4], (unsigned long long)c->x[5],
             (unsigned long long)c->x[6], (unsigned long long)c->x[7]);
         for (int k = 0; k < d->nargs; k++) {
@@ -101,6 +107,11 @@ __attribute__((constructor)) static void hook_dump_init(void) {
     const char *e = getenv("LARECOMP_HOOK_DUMP");
     if (!e) return;
     if (getenv("LARECOMP_HOOK_DUMP_MAX")) dump_max = atoi(getenv("LARECOMP_HOOK_DUMP_MAX"));
+    if (getenv("LARECOMP_HOOK_DUMP_FRAMES")) {
+        const char *f = getenv("LARECOMP_HOOK_DUMP_FRAMES");
+        dump_from = atol(f);
+        dump_to = strchr(f, '-') ? atol(strchr(f, '-') + 1) : dump_from;
+    }
     char buf[1024];
     snprintf(buf, sizeof buf, "%s", e);
     for (char *fn = strtok(buf, ";"); fn && ndumps < 32; fn = strtok(NULL, ";")) {
