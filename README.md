@@ -73,8 +73,8 @@ start to finish yet: see [What was tested](#what-was-tested).
 | OS | Windows 10 or 11, 64-bit |
 | CPU | x86-64 with **AVX2, FMA and BMI2** (Intel Haswell / 2013 or newer, AMD Excavator / Zen or newer). Checked at startup, with a message instead of a crash |
 | GPU | a driver with **Vulkan 1.3**: GPUs that report less are skipped. AMD lists Vulkan 1.3 for Radeon RX Vega and RDNA cards; for any GPU, [gpuinfo.org](https://vulkan.gpuinfo.org) shows the version its driver reports |
-| RAM | the game used up to **3.8 GB** while playing (peak working set, measured in Viridian City). The one-time setup runs one compiler per CPU thread, fewer when RAM is short. Tested only on a 32 GB machine |
-| Disk | about **6 GB** free: 5.7 GB at the peak of the one-time setup, 4.7 GB afterwards (measured) |
+| RAM | the game used up to **3.8 GB** while playing (peak working set, measured in Viridian City). The one-time setup peaked at **5.2 GB** (one compiler per CPU thread, fewer when RAM is short). Tested only on a 32 GB machine |
+| Disk | about **6 GB** free: 5.7 GB at the peak of the one-time setup, 4.6 GB afterwards (measured) |
 | Game | your own extracted *Pokémon: Let's Go, Eevee!* **v1.0.0** (base game, no update): see [Supported game version](#supported-game-version) |
 
 Only tested so far on Windows 11 with an Intel Core i5-14600KF, 32 GB of RAM and an NVIDIA GeForce RTX 3080. Reports
@@ -108,7 +108,7 @@ base title rather than the update): an updated `main` has another build id.
 4. Click **Select game folder...** and choose the folder with your extracted game: the one holding `exefs` and
    `romfs` (a `romfs.bin` image works too), or any folder above it.
 5. The launcher checks the files are *Let's Go, Eevee!* v1.0.0, copies them and **recompiles the game code for your
-   PC**. This happens only once and takes a while: about 16 minutes on a 20-thread Core i5-14600KF, longer on
+   PC**. This happens only once and takes a while: 13 minutes (measured) on a 20-thread Core i5-14600KF, longer on
    CPUs with fewer threads. A progress bar shows how far it got.
 6. Click **Play**.
 
@@ -359,7 +359,7 @@ Arquivos `.xci` / `.nsp` precisam ser extraídos antes. Detalhes em
 **Como jogar:** baixe o zip em [Releases](../../releases), descompacte numa pasta sua, abra o `LetsGoRecomp.exe`,
 clique em **Selecionar pasta do jogo...** e escolha a pasta com o jogo extraído. Se o Windows mostrar "O Windows
 protegeu o computador" (o exe não tem assinatura digital), clique em **Mais informações** e **Executar assim mesmo**. O programa copia os arquivos e
-recompila o código do jogo para o seu PC (só uma vez; uns 16 minutos num i5-14600KF, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
+recompila o código do jogo para o seu PC (só uma vez; uns 13 minutos num i5-14600KF, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
 abre em português quando o Windows está em português.
 
 ### Jogar em português (tradução PT-BR)

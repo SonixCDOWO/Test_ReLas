@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 (2026-10-16)
+
+- **Fixes a crash at the title screen on a new game** (no save yet) in 0.1.1: the movie player looked for the
+  game's movies in an extracted `romfs` folder, which the release's setup doesn't create (it builds the `romfs.bin`
+  image). Movies are now read from inside the image.
+- Tested from a clean folder with the downloaded zip: setup, a new game through the controller and language screens
+  into the introduction, and the Brazilian Portuguese translation installed from the `.rar`.
+
 ## 0.1.1 (2026-10-16)
 
 - **Fixes the game closing right after the controller screen** ("svcBreak") in the 0.1.0 release: its FFmpeg was

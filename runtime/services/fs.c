@@ -385,6 +385,24 @@ static Service *open_romfs_storage(void) {
     return service_new("IStorage(romfs)", storage, st);
 }
 
+// A file inside the RomFS image for readers outside the fs service (the movie player, runtime/hle/movie.c): the
+// image's fd and the file's byte range in it. path: a RomFS path ("bin/movies/..."). False when there's no image
+// (a source checkout with only extracted/romfs/) or no such file.
+bool romfs_image_file(const char *path, int *fd, uint64_t *off, uint64_t *size) {
+    if (romfs_fd < 0) {
+        char img[1024];
+        snprintf(img, sizeof img, "%s.bin", g_romfs_dir);
+        if ((romfs_fd = open(img, O_RDONLY)) < 0) return false;
+        rom_index(romfs_fd);
+    }
+    for (int i = 0; i < rom_nfiles; i++)
+        if (!strcmp(rom_files[i].path, path)) {
+            *fd = romfs_fd, *off = rom_files[i].off, *size = rom_files[i].size;
+            return true;
+        }
+    return false;
+}
+
 // ------------------------------------------------------------------ host-directory filesystem
 typedef struct { char root[1024]; } HostFs;
 typedef struct { int fd; char path[1100]; } HostFile;

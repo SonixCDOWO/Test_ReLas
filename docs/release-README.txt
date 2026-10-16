@@ -17,8 +17,8 @@ Requirements
 - Windows 10 or 11, 64-bit
 - A CPU with AVX2, FMA and BMI2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or newer); checked at startup
 - A GPU whose driver supports Vulkan 1.3 (GPUs that report less are skipped); see vulkan.gpuinfo.org for yours
-- RAM: the game used up to 3.8 GB while playing (measured). Tested on a 32 GB machine
-- About 6 GB of free disk space (measured: 5.7 GB at the peak of the one-time setup, 4.7 GB afterwards)
+- RAM: the game used up to 3.8 GB while playing, the one-time setup 5.2 GB (measured). Tested on a 32 GB machine
+- About 6 GB of free disk space (measured: 5.7 GB at the peak of the one-time setup, 4.6 GB afterwards)
 
 How to play
 -----------
@@ -28,7 +28,7 @@ How to play
 3. Click "Select game folder..." and pick the folder with your extracted game (the one that holds exefs and romfs,
    or any folder above it).
 4. Wait while the game files are copied and the game code is recompiled for your PC. This happens only once and
-   takes a while (about 16 minutes on a 20-thread CPU, longer with fewer threads).
+   takes a while (13 minutes measured on a 20-thread CPU, longer with fewer threads).
 5. Click Play.
 
 Everything stays in this folder: settings (larecomp.ini), saves (save\), the game files (extracted\), translations

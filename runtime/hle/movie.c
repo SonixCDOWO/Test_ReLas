@@ -19,7 +19,11 @@
 #include <string.h>
 
 #include "../hle.h"
+#include "../mods.h"
+#include "../platform.h"
 #include "../settings.h"
+
+bool romfs_image_file(const char *path, int *fd, uint64_t *off, uint64_t *size);  // runtime/services/fs.c
 
 #define MOVIE_EOS 4u
 // movie::Status for the end of the stream: what the library makes of Android's ERROR_END_OF_STREAM (-1011) in
@@ -206,7 +210,59 @@ typedef struct {
     AVPacket *pkt;
     bool have_pkt, eof;
     bool skippable;  // the launch opening (forced on the first launch, no save yet): A / B / + ends it
+    AVIOContext *avio;  // a movie read from inside the RomFS image (romfs.bin): its byte range there
+    int img_fd;
+    uint64_t img_off, img_size, img_pos;
 } Extractor;
+
+static int img_read(void *opaque, uint8_t *buf, int n) {
+    Extractor *e = opaque;
+    uint64_t left = e->img_size - e->img_pos;
+    if (!left) return AVERROR_EOF;
+    if ((uint64_t)n > left) n = (int)left;
+    ssize_t r = pread(e->img_fd, buf, (size_t)n, (off_t)(e->img_off + e->img_pos));
+    if (r <= 0) return AVERROR_EOF;
+    e->img_pos += (uint64_t)r;
+    return (int)r;
+}
+
+static int64_t img_seek(void *opaque, int64_t pos, int whence) {
+    Extractor *e = opaque;
+    if (whence & AVSEEK_SIZE) return (int64_t)e->img_size;
+    whence &= ~AVSEEK_FORCE;
+    int64_t to = whence == SEEK_SET ? pos : whence == SEEK_CUR ? (int64_t)e->img_pos + pos
+               : whence == SEEK_END ? (int64_t)e->img_size + pos : -1;
+    if (to < 0 || (uint64_t)to > e->img_size) return -1;
+    e->img_pos = (uint64_t)to;
+    return to;
+}
+
+static void ex_close(Extractor *e) {
+    if (e->fmt) avformat_close_input(&e->fmt);
+    if (e->avio) {
+        av_freep(&e->avio->buffer);
+        avio_context_free(&e->avio);
+    }
+}
+
+// A movie of the game's RomFS: a mod's copy (runtime/mods.h), else the extracted romfs/ folder (a source checkout),
+// else its bytes inside the romfs.bin image (what the start screen sets up: there is no folder).
+static bool ex_open(Extractor *e, const char *rel, char *host, size_t cap) {
+    struct stat sb;
+    if (mod_romfs_override(rel, host, cap) ||
+        (snprintf(host, cap, "%s/%s", g_romfs_dir, rel), !stat(host, &sb) && S_ISREG(sb.st_mode)))
+        return avformat_open_input(&e->fmt, host, NULL, NULL) >= 0;
+    if (!romfs_image_file(rel, &e->img_fd, &e->img_off, &e->img_size)) return false;
+    snprintf(host, cap, "%s.bin @ %llx (%s)", g_romfs_dir, (unsigned long long)e->img_off, rel);
+    e->img_pos = 0;
+    uint8_t *buf = av_malloc(1 << 16);
+    e->avio = buf ? avio_alloc_context(buf, 1 << 16, 0, e, img_read, NULL, img_seek) : NULL;
+    if (!e->avio) { av_free(buf); return false; }
+    e->fmt = avformat_alloc_context();
+    e->fmt->pb = e->avio;
+    e->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+    return avformat_open_input(&e->fmt, NULL, NULL, NULL) >= 0;  // (frees fmt on failure; avio: ex_close)
+}
 
 static bool g_skip_held;           // ex_fill: A / B held at the last look
 static double g_skip_pressed_at;    // when they were pressed (0 = not yet)
@@ -250,13 +306,14 @@ static void ex_fill(Extractor *e) {
 static void ex_set_data_source(Cpu *c) {
     Extractor *e = self_state(c);
     const char *path = (const char *)(uintptr_t)c->x[2];
-    // "rom:/region_common/movie/title.webm" -> extracted/romfs/region_common/movie/title.webm
+    // "data:/bin/movies/EEVEE_GO/title_male.webm" -> the RomFS file bin/movies/EEVEE_GO/title_male.webm
     const char *rel = path && strstr(path, ":/") ? strstr(path, ":/") + 2 : path;
-    char host[1024];
-    snprintf(host, sizeof host, "%s/%s", g_romfs_dir, rel ? rel : "");
+    char host[1200] = "";
+    bool opened = rel && ex_open(e, rel, host, sizeof host);
     LOG("[movie] open %s -> %s\n", path ? path : "(null)", host);
-    if (avformat_open_input(&e->fmt, host, NULL, NULL) < 0 || avformat_find_stream_info(e->fmt, NULL) < 0) {
-        LOG("[movie] cannot open %s\n", host);
+    if (!opened || avformat_find_stream_info(e->fmt, NULL) < 0) {
+        LOG("[movie] cannot open %s\n", rel ? rel : "(null)");
+        ex_close(e);
         c->x[0] = 1;
         return;
     }
@@ -388,7 +445,7 @@ static void movie_track(int kind, void *p, bool add) {
 
 static void ex_dtor(Cpu *c) {
     Extractor *e = self_state(c);
-    if (e && e->fmt) avformat_close_input(&e->fmt);
+    if (e) ex_close(e);
     if (e) movie_track(0, e, false);
     c->x[0] = 0;
 }
@@ -911,7 +968,7 @@ static void dec_dtor(Cpu *c) {
 RT_ON_RESET(movie_reset) {
     for (int i = 0; i < MAX_MOVIE_OBJS; i++) {
         Extractor *e = g_movie_objs[0][i];
-        if (e && e->fmt) avformat_close_input(&e->fmt);
+        if (e) ex_close(e);
         Decoder *d = g_movie_objs[1][i];
         if (d && d->ctx) avcodec_free_context(&d->ctx);
         g_movie_objs[0][i] = g_movie_objs[1][i] = NULL;
