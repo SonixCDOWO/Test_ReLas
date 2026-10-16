@@ -494,7 +494,35 @@ static struct {
     bool prim_restart;
     uint32_t restart_index;
     uint64_t copy_row_stride, copy_image_stride;
+    uint64_t obj;       // frame interpolation: the game object the current draws belong to (CMD_OBJECT), 0 = none
+    uint32_t obj_draw;  // draws of that object so far in this run of it
 } st;
+
+// frame interpolation (prototype, LARECOMP_INTERP=1): the hooks below; the rest at the end of this file
+static int ip_on = -1;
+static bool ip_replaying;     // running a recorded frame again for the in-between image
+static uint64_t ip_stats_tagged, ip_stats_untagged;  // draws with / without a game object (CMD_OBJECT)
+static uint64_t ip_draw_sig;  // the current draw's identity (draw_)
+static bool ip_enabled(void);
+bool vk_interp_enabled(void) { return ip_enabled(); }  // (cmdbuf.c: hooks the game's object draw functions)
+static bool ip_enabled(void) {
+    // LARECOMP_INTERP (tests) overrides the launcher's 30 / 60 fps choice (larecomp.ini fps)
+    if (ip_on == -1) ip_on = getenv("LARECOMP_INTERP") ? atoi(getenv("LARECOMP_INTERP")) : -2;
+    return ip_on == -2 ? g_settings.fps == 60 : ip_on > 0;
+}
+static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size);
+static void ip_note_list(uint64_t handle);
+static bool ip_skip_op(uint32_t op) {  // what the replay must not do again: it writes guest memory or signals the game
+    switch (op) {
+    case CMD_DISPATCH: case CMD_DISPATCH_INDIRECT: case CMD_COPY_BUFFER_TO_BUFFER: case CMD_COPY_TEXTURE_TO_BUFFER:
+    case CMD_UPDATE_UNIFORM_BUFFER: case CMD_FENCE_SYNC: case CMD_WAIT_SYNC: case CMD_SIGNAL_EVENT: case CMD_WAIT_EVENT:
+    case CMD_REPORT_COUNTER: case CMD_CLEAR_BUFFER:
+    case CMD_COPY_BUFFER_TO_TEXTURE:  // (uploads: done when the frame ran; again, they overran scaled images)
+        return true;
+    default:
+        return false;
+    }
+}
 
 uint32_t nvn_window_origin(void);
 uint32_t nvn_depth_mode(void);
@@ -1620,6 +1648,10 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
         }
         if (skinned_vs) g_exp_count[2]++;
     }
+    if (ip_enabled()) {  // frame interpolation: recorded, or the blended copy in the replay
+        const void *d = ip_cbuf(stage, k, r.addr, (uint32_t)size);
+        if (d) return ubo_span(vk_transient_copy(d, size, 256), size);
+    }
     // snapshot: later CPU writes must not leak in. Shared by the draws of one submission binding the same range:
     // within a command list nothing writes guest memory (no inline UpdateUniformBuffer: that writes through below
     // and drops the shared copies).
@@ -1966,6 +1998,16 @@ static uint64_t prof_tp_;
 static void draw_(CmdRec *r, bool indexed) {
     if (prof) prof_tp_ = SDL_GetTicksNS();
     if (!st.program) { SKIP(0); return; }
+    if (ip_enabled()) {  // (frame interpolation: what identifies this draw from one frame to the next)
+        // what the draw is (program, vertex buffer, parameters), and which game object it belongs to: the same mesh
+        // drawn for two objects (bushes, Pidgeys) is told apart by the object, not by the order the game drew them in
+        uint64_t h = 0xcbf29ce484222325ull ^ (uint64_t)(uintptr_t)st.program ^ ((uint64_t)indexed << 63);
+        h = (h ^ st.vbuf[0].addr) * 0x100000001B3ull;
+        for (int i = 0; i < 8; i++) h = (h ^ r->x[i]) * 0x100000001B3ull;
+        if (st.obj) h = (h ^ st.obj) * 0x100000001B3ull, ip_stats_tagged++;
+        else ip_stats_untagged++;
+        ip_draw_sig = h;
+    }
     ShaderKey vkey = {0}, fkey = {0};
     vkey.glsl = fkey.glsl = 1;
     vkey.flip_y = fkey.flip_y = nvn_window_origin() == 0;
@@ -2953,16 +2995,25 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
 // ================================================================== executor (renderer.m exec_list)
 static void exec_list(uint64_t handle, int depth) {
     uint64_t p = handle;
+    if (depth == 0) st.obj = 0, st.obj_draw = 0;  // (a submitted list starts with no object; its called lists inherit)
     for (int guard = 0; guard < 10000000; guard++) {
         CmdRec *r = (CmdRec *)(uintptr_t)p;
         void *x = r->extra;
         if (r->op < CMD_COUNT) op_counts[r->op]++;
+        if (ip_replaying && ip_skip_op(r->op)) { p += r->size; continue; }
         switch (r->op) {
         case CMD_END: return;
+        case CMD_OBJECT: st.obj = r->x[0]; st.obj_draw = 0; { static int d; if (getenv("LARECOMP_OBJDBG") && vk_frame_counter() == 1450 && d++ < 80) LOG("[objdbg] depth %d object %llx\n", depth,(unsigned long long)r->x[0]); } break;
         case CMD_JUMP: p = r->x[0]; continue;
         case CMD_CALL: {
             const uint64_t *h = x;
-            for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) exec_list(h[i], depth + 1);
+            uint64_t obj = st.obj;  // (a called list names objects of its own: they end with it)
+            uint32_t obj_draw = st.obj_draw;
+            for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) {
+                st.obj = obj, st.obj_draw = obj_draw;
+                exec_list(h[i], depth + 1);
+            }
+            st.obj = obj, st.obj_draw = obj_draw;
             break;
         }
         case CMD_BIND_PROGRAM: bind_program_stages((NvnProgram *)(uintptr_t)r->x[0], (uint32_t)r->x[1]); break;
@@ -3132,6 +3183,7 @@ static void exec_list(uint64_t handle, int depth) {
 
 void backend_execute(uint64_t handle) {
     PROF_T0();
+    if (ip_enabled()) ip_note_list(handle);
     exec_list(handle, 0);
     PROF_ADD(prof_exec);
     if (prof) cum_exec += SDL_GetTicksNS() - prof_t0_;
@@ -3139,4 +3191,212 @@ void backend_execute(uint64_t handle) {
     if (sync_submit < 0) sync_submit = getenv("LARECOMP_SYNC_SUBMIT") ? 1 : 0;
     if (sync_submit) renderer_flush();
     else renderer_submit();
+}
+
+// ================================================================== frame interpolation (prototype)
+// LARECOMP_INTERP=1: 60 fps from the game's 30 by drawing an in-between frame (docs/PESQUISA-60FPS.md). The game's
+// logic advances one step per frame, so the frame rate can't simply be raised; instead, like RT64 (Zelda64Recomp)
+// and Ship of Harkinian, frame N's draws are run a second time with their constant buffers (camera, world, bone
+// matrices) blended halfway between N-1 and N, and that image is shown half a frame before N.
+//  - recording: the command lists submitted in a frame (and a hash of their records), the exec state at the frame's
+//    start, and a copy of every vertex / fragment constant buffer a draw binds (cbuf 3 and up), keyed by stage,
+//    binding, the program, vertex buffer 0, the draw's parameters and the occurrence of that key in the frame;
+//  - replay (vk_interp_render, at the present): the same lists from the same start state, skipping what writes guest
+//    memory (compute, copies to buffers, inline uniform updates, syncs, counters); each constant buffer is the blend of
+//    its two copies, word by word, for normal floats close enough (other words, and draws without a match, keep N);
+//  - a list whose records changed since it ran (the game reused its memory) cancels that frame's in-between image.
+typedef struct { uint64_t key; uint32_t off, size; } IpEntry;
+typedef struct {
+    IpEntry *e;
+    uint32_t n, cap;
+    uint8_t *data;
+    uint64_t used, dcap;
+    uint32_t *tab;  // open addressing: key -> e index + 1
+    uint64_t lists[256], hashes[256];
+    int nlists;
+    bool overflow, valid;
+    uint64_t destroyed;  // g_nvn_destroyed when the frame started
+    __typeof__(st) start;
+} IpFrame;
+extern uint64_t g_nvn_destroyed;  // (objects.c: textures, pools, programs the game finalized)
+#define IP_TAB (1u << 16)
+static IpFrame ipf[2];
+static int ipc;  // ipf[ipc]: the frame being recorded; ipf[ipc ^ 1]: the one before
+static float ip_t = 0.5f;
+static uint32_t ip_occ[IP_TAB];  // occurrences of each base key in this frame / replay (by slot)
+static uint64_t ip_occ_key[IP_TAB];
+static uint64_t ip_stats[4];  // blended, kept (no match), words kept, frames replayed
+
+static uint64_t ip_mix(uint64_t h, uint64_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); return h * 0x100000001B3ull; }
+
+static void ip_occ_reset(void) { memset(ip_occ_key, 0, sizeof ip_occ_key); }
+
+static uint64_t ip_key(int stage, int k) {
+    uint64_t base = ip_mix(ip_mix(ip_draw_sig, (uint64_t)stage), (uint64_t)k);
+    if (!base) base = 1;
+    uint32_t s = (uint32_t)(base ^ (base >> 29)) & (IP_TAB - 1);
+    while (ip_occ_key[s] && ip_occ_key[s] != base) s = (s + 1) & (IP_TAB - 1);
+    if (!ip_occ_key[s]) { ip_occ_key[s] = base; ip_occ[s] = 0; }
+    return ip_mix(base, ip_occ[s]++);
+}
+
+static const IpEntry *ip_find(const IpFrame *f, uint64_t key) {
+    if (!f->tab) return NULL;
+    uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
+    while (f->tab[s]) {
+        const IpEntry *e = &f->e[f->tab[s] - 1];
+        if (e->key == key) return e;
+        s = (s + 1) & (IP_TAB - 1);
+    }
+    return NULL;
+}
+
+static void ip_frame_clear(IpFrame *f) {
+    f->n = 0; f->used = 0; f->nlists = 0; f->overflow = false; f->valid = false;
+    if (f->tab) memset(f->tab, 0, IP_TAB * sizeof *f->tab);
+}
+
+static void ip_record(uint64_t key, const void *data, uint32_t size) {
+    IpFrame *f = &ipf[ipc];
+    if (!f->tab) f->tab = calloc(IP_TAB, sizeof *f->tab);
+    if (f->n >= IP_TAB / 2) { f->overflow = true; return; }
+    if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 4096; f->e = realloc(f->e, f->cap * sizeof *f->e); }
+    if (f->used + size > f->dcap) { f->dcap = (f->used + size) * 2 + (1 << 20); f->data = realloc(f->data, f->dcap); }
+    memcpy(f->data + f->used, data, size);
+    f->e[f->n] = (IpEntry){key, (uint32_t)f->used, size};
+    f->used += size;
+    uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
+    while (f->tab[s]) s = (s + 1) & (IP_TAB - 1);
+    f->tab[s] = ++f->n;
+}
+
+// cbuf_info, constant buffers 3+ of the vertex / fragment stage: recording copies them (returns NULL: bind as usual);
+// the replay returns the blended data to bind.
+static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
+    if (stage > 1) return NULL;
+    uint64_t key = ip_key(stage, k);
+    if (!ip_replaying) { ip_record(key, (const void *)(uintptr_t)addr, size); return NULL; }
+    const IpEntry *n = ip_find(&ipf[ipc], key), *o = ip_find(&ipf[ipc ^ 1], key);
+    if (!n) return NULL;
+    const uint8_t *nd = ipf[ipc].data + n->off;
+    if (!o || o->size != n->size) { ip_stats[1]++; return nd; }
+    static uint32_t buf[0x10000 / 4];
+    const uint32_t *a = (const uint32_t *)(ipf[ipc ^ 1].data + o->off), *b = (const uint32_t *)nd;
+    uint32_t nw = n->size / 4;
+    for (uint32_t i = 0; i < nw; i++) {
+        uint32_t ea = (a[i] >> 23) & 0xFF, eb = (b[i] >> 23) & 0xFF;
+        float fa, fb;
+        memcpy(&fa, &a[i], 4);
+        memcpy(&fb, &b[i], 4);
+        // normal floats only (small integers look like denormals, bit masks like NaNs), and no jumps (camera cuts,
+        // wrapping scroll offsets): those keep frame N's value
+        if (a[i] != b[i] && ea && eb && ea != 0xFF && eb != 0xFF && fabsf(fb - fa) <= 0.5f * (fabsf(fa) + fabsf(fb)) + 4.0f) {
+            float v = fa + (fb - fa) * ip_t;
+            memcpy(&buf[i], &v, 4);
+        } else {
+            buf[i] = b[i];
+            if (a[i] != b[i]) ip_stats[2]++;
+        }
+    }
+    if (n->size > nw * 4) memcpy((uint8_t *)buf + nw * 4, nd + nw * 4, n->size - nw * 4);
+    ip_stats[0]++;
+    return buf;
+}
+
+// hash of a command list's records (JUMPs and CALLs followed), to tell whether its memory still holds what ran
+static uint64_t ip_list_hash(uint64_t handle, int depth) {
+    uint64_t h = 0xcbf29ce484222325ull, p = handle;
+    for (int guard = 0; guard < 10000000; guard++) {
+        const CmdRec *r = (const CmdRec *)(uintptr_t)p;
+        if (r->op >= CMD_COUNT || r->size < sizeof(CmdRec) || r->size > (1u << 20)) return 0;
+        const uint64_t *w = (const uint64_t *)r;
+        for (uint32_t i = 0; i < r->size / 8; i++) h = ip_mix(h, w[i]);
+        if (r->op == CMD_END) return h;
+        if (r->op == CMD_JUMP) { p = r->x[0]; continue; }
+        if (r->op == CMD_CALL) {
+            const uint64_t *hs = (const uint64_t *)r->extra;
+            for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) h = ip_mix(h, ip_list_hash(hs[i], depth + 1));
+        }
+        p += r->size;
+    }
+    return 0;
+}
+
+static void ip_note_list(uint64_t handle) {
+    IpFrame *f = &ipf[ipc];
+    if (f->nlists >= 256) { f->overflow = true; return; }
+    f->hashes[f->nlists] = ip_list_hash(handle, 0);
+    f->lists[f->nlists++] = handle;
+}
+
+// The hold image: frame N's presented texture, kept while the replay overwrites it with the in-between image.
+static TexBackend ip_hold;
+static TexBackend *ip_hold_copy(TexBackend *src) {
+    TexBackend *d = &ip_hold;
+    if (d->image && (d->width != src->width || d->height != src->height || d->format != src->format)) {
+        vk_views_forget(d);
+        vk_defer_image(d->image, d->mem);
+        d->image = VK_NULL_HANDLE;
+        d->mem = VK_NULL_HANDLE;
+    }
+    if (!d->image) {
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT,
+                                .imageType = VK_IMAGE_TYPE_2D, .format = src->format, .extent = {src->width, src->height, 1},
+                                .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &d->image, &d->mem, NULL));
+        d->format = src->format; d->width = src->width; d->height = src->height; d->depth = 1; d->layers = 1; d->levels = 1;
+        d->samples = 1; d->aspect = VK_IMAGE_ASPECT_COLOR_BIT; d->base_type = VK_IMAGE_VIEW_TYPE_2D;
+        vk_image_init_layout(vk_cmd(), d->image, d->aspect);
+    }
+    d->sx = src->sx; d->sy = src->sy; d->scalable = src->scalable;
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkImageCopy rg = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                      .extent = {src->width, src->height, 1}};
+    vkCmdCopyImage(cb, src->image, VK_IMAGE_LAYOUT_GENERAL, d->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    vk_full_barrier(cb);
+    return d;
+}
+
+// At the present of frame N (presented texture b): when frame N-1 was recorded too and N's lists are intact, renders
+// the in-between image into the game's textures (b then holds it) and returns frame N's own image in *hold; false:
+// nothing to show before N. Either way, recording moves on to the next frame.
+bool vk_interp_render(TexBackend *b, TexBackend **hold) {
+    if (!ip_enabled()) return false;
+    IpFrame *cur = &ipf[ipc], *prev = &ipf[ipc ^ 1];
+    bool ok = prev->valid && cur->valid && cur->nlists > 0 && !cur->overflow && !prev->overflow && b && b->image &&
+              b->aspect == VK_IMAGE_ASPECT_COLOR_BIT && b->samples <= 1 && cur->destroyed == g_nvn_destroyed;
+    for (int i = 0; ok && i < cur->nlists; i++)
+        if (!cur->hashes[i] || ip_list_hash(cur->lists[i], 0) != cur->hashes[i]) ok = false;
+    if (ok) {
+        vk_end_pass();
+        *hold = ip_hold_copy(b);
+        __typeof__(st) end = st;
+        st = cur->start;
+        st.rt_dirty = true;
+        ip_replaying = true;
+        ip_occ_reset();
+        for (int i = 0; i < cur->nlists; i++) exec_list(cur->lists[i], 0);
+        vk_end_pass();
+        ip_replaying = false;
+        st = end;
+        st.rt_dirty = true;
+        ip_stats[3]++;
+        if (ip_stats[3] % 300 == 1)
+            LOG("[interp] frame %llu: %llu blended, %llu without a match, %llu words kept (replays %llu)\n",
+                (unsigned long long)vk_frame_counter(), (unsigned long long)ip_stats[0], (unsigned long long)ip_stats[1],
+                (unsigned long long)ip_stats[2], (unsigned long long)ip_stats[3]);
+        if (ip_stats[3] % 300 == 1)
+            LOG("[interp] draws with an object %llu, without %llu\n", (unsigned long long)ip_stats_tagged, (unsigned long long)ip_stats_untagged);
+    }
+    // the next frame records into the other slot, from the state this one ended with
+    ipc ^= 1;
+    ip_frame_clear(&ipf[ipc]);
+    ipf[ipc].start = st;
+    ipf[ipc].destroyed = g_nvn_destroyed;
+    ipf[ipc].valid = true;
+    ip_occ_reset();
+    return ok;
 }

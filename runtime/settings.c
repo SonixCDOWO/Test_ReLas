@@ -18,6 +18,7 @@ static const char *settings_file(void) {
 
 Settings g_settings = {
     .fullscreen = false,
+    .fps = 30,
     .volume = 1.0f,
     .mouse_sens = 0.1f,
     .reverb = true,
@@ -48,6 +49,7 @@ void settings_load(void) {
             continue;
         }
         if (!strcmp(key, "fullscreen")) g_settings.fullscreen = atoi(val) != 0;
+        else if (!strcmp(key, "fps")) g_settings.fps = atoi(val) == 60 ? 60 : 30;
         else if (!strcmp(key, "render_height")) g_settings.res_height = atoi(val) >= 360 && atoi(val) <= 4320 ? atoi(val) : 0;
         else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
         else if (!strcmp(key, "mouse_sens")) g_settings.mouse_sens = (float)atof(val);
@@ -77,6 +79,7 @@ void settings_save(void) {
     if (!f) { LOG("[settings] cannot write %s\n", SETTINGS_FILE); return; }
     fprintf(f, "# " RT_APP_NAME " settings (set on the start screen)\n");
     fprintf(f, "fullscreen = %d\n", g_settings.fullscreen);
+    fprintf(f, "fps = %d\n", g_settings.fps);
     fprintf(f, "render_height = %d\n", g_settings.res_height);
     fprintf(f, "smaa = %d\n", g_settings.antialias == AA_SMAA);
     fprintf(f, "mod = %s\n", g_settings.mod);

@@ -188,7 +188,9 @@ NVN(nvnMemoryPoolInitialize) {
     SET_HOST(A(0), p);
     RET(1);
 }
-NVN(nvnMemoryPoolFinalize) { free(HOST(NvnPool, A(0))); SET_HOST(A(0), 0); }
+// Objects the game destroys (frame interpolation, exec.c: a recorded frame that may reference them is not replayed)
+uint64_t g_nvn_destroyed;
+NVN(nvnMemoryPoolFinalize) { g_nvn_destroyed++; free(HOST(NvnPool, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnMemoryPoolSetDebugLabel) { (void)c; }
 NVN(nvnMemoryPoolMap) { RET(HOST(NvnPool, A(0))->storage); }
 NVN(nvnMemoryPoolGetBufferAddress) { RET(HOST(NvnPool, A(0))->storage); }  // GPU address == CPU address
@@ -363,6 +365,7 @@ NVN(nvnTextureInitialize) {
     RET(1);
 }
 NVN(nvnTextureFinalize) {
+    g_nvn_destroyed++;
     NvnTexture *t = HOST(NvnTexture, A(0));
     if (t) { backend_texture_destroyed(t); free(t); }
     SET_HOST(A(0), 0);
@@ -557,7 +560,7 @@ NvnDescPool *nvn_find_pool(NvnDescPool **reg, uint64_t guest_pool) {
 
 // ================================================================== programs
 NVN(nvnProgramInitialize) { SET_HOST(A(0), calloc(1, sizeof(NvnProgram))); RET(1); }
-NVN(nvnProgramFinalize) { free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
+NVN(nvnProgramFinalize) { g_nvn_destroyed++; free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnProgramSetDebugLabel) { (void)c; }
 NVN(nvnProgramSetSampleShading) { (void)c; }
 NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
@@ -673,6 +676,19 @@ static void present_pace(int interval) {
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
+    {   // LARECOMP_POKE32="<guest addr>=<value>[;...]": 32-bit values written to the game's memory before every present
+        static const char *poke = (const char *)1;  // (experiments: a constant the game reads, without rebuilding anything)
+        if (poke == (const char *)1) poke = getenv("LARECOMP_POKE32");
+        for (const char *p = poke; p && *p;) {
+            char *eq;
+            uint64_t pa = strtoull(p, &eq, 0);
+            if (*eq != '=') break;
+            char *end;
+            uint32_t v = (uint32_t)strtoull(eq + 1, &end, 0);
+            if (pa >= 0x7000000000ull && pa < 0x7800000000ull) *(uint32_t *)(uintptr_t)pa = v;
+            p = *end == ';' ? end + 1 : end;
+        }
+    }
     present_pace(w->interval);
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
 }
