@@ -19,6 +19,15 @@ engine.
 
 ![Viridian City at 1080p](docs/viridian.jpg)
 
+| | |
+|---|---|
+| ![Catching a wild Bellsprout](docs/shots/catch.jpg) | ![A trainer battle on Route 1](docs/shots/battle.jpg) |
+| Catching a wild Pokémon (aimed with the mouse or a stick) | Trainer battle on Route 1 |
+| ![Feeding Eevee in Play with Eevee](docs/shots/eevee.jpg) | ![The menu with the Brazilian Portuguese fan translation](docs/shots/ptbr.jpg) |
+| Play with Eevee (the touch screen, with mouse or controller) | With the Brazilian Portuguese fan translation |
+
+*Screenshots of this port running on Windows (game rendered at 1280x720, captured straight from the renderer).*
+
 ## Contents
 - [Status](#status)
 - [Requirements](#requirements)
@@ -260,6 +269,7 @@ Most internal documentation is in Portuguese.
 - [docs/MODO-BATALHA.md](docs/MODO-BATALHA.md): experimental classic battles against wild Pokémon (in progress)
 - [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md): research on 60 fps
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to report problems and contribute
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release
 
 ## Credits
 
