@@ -181,6 +181,7 @@ int main(int argc, char **argv) {
             extern void launcher_lg_run(const char *root);
             launcher_lg_run(root);
         }
+        { extern void fps60_configure(void); fps60_configure(); }  // (runtime/hle/fps60.c: the launcher's 60 fps option)
         boot(root);
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested
         teardown();

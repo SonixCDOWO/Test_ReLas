@@ -39,7 +39,7 @@ _Atualizado em 15/10/2026._
    (cache vazio) a área aparece completa depois do carregamento. Qualidade: SMAA ligado, filtro anisotrópico 16x e supersampling bem
    reduzido (1440p / 4K no launcher numa tela menor; 4K roda a ~78 fps sem limite numa RTX 3080). Detalhes em
    [HISTORICO.md, parte 8](HISTORICO.md).
-5. **60 fps de verdade**: a lógica do jogo anda um passo por quadro. Com `LARECOMP_FPS=60` ele chega ao mesmo estado
+5. **60 fps (experimental, opção "60 fps (experimental)" no launcher, desligada por padrão; `fps = 60` no larecomp.ini ou `LARECOMP_FPS60=1`)**: mundo a 60 nativo, menus e Pokédex a 30 com quadro intermediário, batalhas e capturas a 30 (HISTORICO 43-49). Histórico da investigação: a lógica do jogo anda um passo por quadro. Com `LARECOMP_FPS=60` ele chega ao mesmo estado
    no mesmo número de quadro em metade do tempo, ou seja, roda em velocidade dobrada (medido em 15/10/2026 com
    `tools/repro.sh`). 60 fps exigiria mudar o passo de tempo do próprio jogo. O que já se sabe:
    - O motor escolhe o intervalo de present no fim de quadro (`0x7000029e80`, função `0x7000029d30`):

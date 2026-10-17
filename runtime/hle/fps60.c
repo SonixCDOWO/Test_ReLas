@@ -186,6 +186,24 @@ void fps60_present(void) {
     g_world = w;
 }
 
+// Before each boot (runtime/main.c): the launcher's "60 fps (experimental)" (larecomp.ini fps = 60) turns the mode on
+// when LARECOMP_FPS60 doesn't say otherwise.
+void fps60_configure(void) {
+    static bool hooked;
+    extern void settings_load(void);
+    settings_load();  // (read once; without the launcher it would come later, in boot)
+    if (!getenv("LARECOMP_FPS60")) g_on = g_settings.fps == 60, g_all60 = false;
+    if (g_on && !hooked) {
+        hooked = true;
+        rt_register_fnhook(FIELD_UPDATE, field_hook);
+        rt_register_fnhook(ENCOUNTER_SCENE, scene_hook);
+        rt_register_fnhook(BATTLE_START, scene_hook);
+        rt_register_fnhook(G_ACCESSOR, accessor_hook);
+    }
+    g_world = true, g_special = g_scene = g_played = false;
+    if (g_on) LOG("[fps60] on: the world at 60, menus at 30 with in-between images, battles and captures at 30\n");
+}
+
 __attribute__((constructor)) static void fps60_init(void) {
     const char *e = getenv("LARECOMP_FPS60");
     g_on = e && atoi(e);
