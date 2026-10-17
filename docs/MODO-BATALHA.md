@@ -149,6 +149,31 @@ O código, no `main`:
 **Ferramenta nova**: `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n registros>`) varre a memória
 mapeada do guest (Windows, `runtime/hle/memscan.c`) e loga cada acerto, os 0x40 bytes e quem aponta para a base.
 
+## Etapa 4 (17/10/2026): o protótipo funciona; os nativos de script do jogo
+**Protótipo** (`runtime/hle/wildbattle.c`, `LARECOMP_WILDBATTLE=1`): o gancho no `305ad0` (o gatilho do toque num
+selvagem, que chama a captura e depois configura o handle devolvido, por isso é substituído inteiro) cria o processo da
+classe A pela fábrica `17f0a0`, o gancho no construtor `289ac0` grava o hash nosso em `[+0x98]` e o gancho em `2bad00`
+responde a esse hash com uma cópia do registro real do Snorlax (molde) com espécie, nível e golpes trocados. Jogado por
+um humano na Rota 1: encostar num Pokémon abre a batalha (Rattata nível 3 de teste) e, ao fim, a captura da espécie da
+batalha. Problema aberto: tela preta ao voltar ao mundo (o mundo é desenhado, os passes finais saem pretos: um fade).
+
+**Os nomes dos nativos de script estão no `main`** (strings em `image+0xeff9xx..0xf01dxx`, ponteiro para a função no slot
+seguinte da tabela de nativos): `CallTrainerBattleCore` `17e150`, **`CallWildBattle` `17e440`**, `GetTrainerBattleResult_`
+`17e700`, `GetWildBattleResult_` `17e7c0`, `CallBattleLose_` `17e880`, `SaveEventEncountPokemonParam` `17ed00`,
+`ClearEventEncountPokemonParam` `17ee70`, `DisappearEncountSymbols` `185cc0`, `EncountPokeSetVisible` `189fe0`,
+`FadeIn_` `1a7680`, `FadeOut_` `1a7860`, `FadeWait_` `1a7aa0`, `FadeCheck_` `1a7ad0`. Os scripts são AMX (Pawn) em
+`bin/archive/script_amx.gfpak` (GFLXPACK: 705 arquivos, LZ4; formato no `pkNX.Containers/Misc/GFPack.cs`) e **não guardam
+nomes**, só hashes.
+- **`CallWildBattle(amx, params)`**: params = `{[1] hash u64, [2] flags u32}`. Cria a classe A (fábrica `17f0a0`) e grava
+  `[+0x98] = hash`, `[+0xa0] = [+0xa1] = 0`, `[+0xa2] = 1`, `[+0xa3] = !(flags>>3 & 1)`, `[+0xa4] = !(flags>>1 & 1)`,
+  `[+0xa5] = !(flags>>2 & 1)`, `[+0xa6] = 1` só num caso especial (senão 0), e suspende o script (`672e50(amx, 0xc)`) até o
+  processo acabar. Os padrões do **construtor** (`a0 = a1 = 1`, `a2 = 0`) são o oposto: o primeiro protótipo os deixava assim.
+- `FadeIn_(amx, params)`: `{[1] quadros, [2] hash FNV-1a 64 do nome do tipo}` -> índice 1..11 -> função do motor
+  `11ece0(gerenciador, 0, tipo, quadros)`; `FadeOut_` termina em `11ee50(gerenciador, 0, tipo, ...)`; gerenciador de fade
+  = `[[*GOT 0x70015facf8]]`. Nomes dos tipos (strings em `image+0xefd685..0xefdb2e`): `fade_front_{fade,wipe,r,trainer,pika,
+  bui,poke_get,legend,legend_get,loading}_{in,out,keep}`.
+- O script faz FadeOut -> CallWildBattle -> (espera) -> GetWildBattleResult_ -> FadeIn..., o que o protótipo não faz.
+
 ## Próximas etapas
 3. Confirmar o caminho alternativo (`289c4c` → `28bda0`, modo 3) e a captura pós-batalha (`319e20` → `31a0e0`) em
    execução: o ideal é um save perto de uma batalha selvagem nativa (lendário ou Snorlax); sem isso, forçar o

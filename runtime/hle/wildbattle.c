@@ -50,6 +50,40 @@ static int g_a6;
 // [[*GOT 0x70015faab8]+0x68] the allocator (both as in the game's call to f_700028ef70).
 static bool g_active;  // a static battle process of ours is alive: the touch that keeps calling the trigger is swallowed
 
+// The touched Pokémon's own battle/capture configuration. f_7000305ad0 gets, in x0, the interface (+0x48) of the capture
+// configuration object (0x2b8 bytes) that f_70003058f0 already built from the wild Pokémon (species, form, level, nature,
+// IVs, shiny...); the battle's configuration is the same kind of object, filled by f_70002f60c0 from a table record. So
+// instead of trusting a hand-made record, the trigger keeps a copy of the real configuration and the hook on f_70002f60c0
+// lays it over the record-built one (keeping the word at +0x298, which that function sets to 1 for a static battle).
+// LARECOMP_WILDBATTLE_USECFG=0 keeps the synthetic record (species / level from LARECOMP_WILDBATTLE_*).
+#define CFG_SIZE 0x2b8
+#define CONFIG_FROM_RECORD 0x70002f60c0ull  // (x0 = configuration, x1 = record)
+static uint8_t g_cfg[CFG_SIZE] __attribute__((aligned(16)));
+static bool g_cfg_valid, g_usecfg = true;
+static uint8_t g_rec[0x60] __attribute__((aligned(16)));  // (the synthetic record, below)
+
+static int config_hook(Cpu *c, uint64_t addr) {
+    uint64_t cfg = c->x[0], rec = c->x[1];
+    if (rec != (uint64_t)(uintptr_t)g_rec) return 0;  // (a real record: the game's own)
+    uint64_t lr = c->x[30];
+    rt_call_original(c, addr);  // the configuration from our synthetic record
+    c->x[30] = lr;
+    if (g_usecfg && g_cfg_valid) {
+        uint8_t from_rec[CFG_SIZE];
+        memcpy(from_rec, (const void *)(uintptr_t)cfg, CFG_SIZE);
+        int n = 0;
+        for (int o = 0; o < CFG_SIZE; o += 4) {
+            if (memcmp(from_rec + o, g_cfg + o, 4) && n++ < 90)
+                LOG("[wild]   cfg +%03x: record-built %08x, real %08x\n", o, *(const uint32_t *)(from_rec + o), *(const uint32_t *)(g_cfg + o));
+        }
+        LOG("[wild] real configuration laid over the record's (%d words differ)\n", n);
+        uint32_t keep = *(const uint32_t *)(from_rec + 0x298);
+        memcpy((void *)(uintptr_t)cfg, g_cfg, CFG_SIZE);
+        *(uint32_t *)(uintptr_t)(cfg + 0x298) = keep;
+    }
+    return 1;
+}
+
 // Research: the game's own species / form accessors (f_70003058f0 reads them from [x22] to build the capture's
 // configuration), tried on the objects the trigger gets, to find which one is the touched Pokémon's data.
 static void probe_identity(Cpu *c) {
@@ -78,6 +112,10 @@ static int trigger_hook(Cpu *c, uint64_t addr) {
     if (g_count >= g_max) return 0;  // (the game's capture runs)
     g_count++;
     if (getenv("LARECOMP_WILDBATTLE_PROBE")) probe_identity(c);
+    if (g_usecfg) {
+        memcpy(g_cfg, (const void *)(uintptr_t)(c->x[0] - 0x48), CFG_SIZE);
+        g_cfg_valid = true;
+    }
     uint64_t lr = c->x[30];
     uint64_t mgr = R64(R64(c->x[1], 0), 0x68);
     uint64_t alloc = R64(R64(R64(GOT_ALLOCATOR, 0), 0), 0x68);
@@ -100,7 +138,8 @@ static int trigger_hook(Cpu *c, uint64_t addr) {
 // Research (LARECOMP_WILDBATTLE_DEBUG=1): 240 presents after the battle's process is gone, dump the frame's render passes
 // (build/pass_NNN.png) and every draw (the F9 request of the renderer): what a black screen after the battle is made of.
 extern volatile int g_debug_frame_request;
-static volatile long g_end_frame;
+static volatile long g_end_frame;  // the present the battle's process was destroyed in (fade-in timing)
+static volatile long g_dbg_frame;  // the same, for the debug dump (which clears it)
 
 #ifdef _WIN32
 #include <windows.h>
@@ -108,10 +147,10 @@ static DWORD WINAPI debug_thread(LPVOID unused) {
     (void)unused;
     for (;;) {
         Sleep(50);
-        if (g_end_frame && (long)renderer_present_count() >= g_end_frame + 240) {
+        if (g_dbg_frame && (long)renderer_present_count() >= g_dbg_frame + 240) {
             LOG("[wild] f%llu debug dump requested\n", (unsigned long long)renderer_present_count());
             g_debug_frame_request = 1;
-            g_end_frame = 0;
+            g_dbg_frame = 0;
         }
     }
     return 0;
@@ -128,7 +167,7 @@ static DWORD WINAPI debug_thread(LPVOID unused) {
 #define FIELD_UPDATE 0x70002f8bb0ull
 static int g_fade_type = 1, g_fade_seen;
 static bool g_fadein_on;
-static int g_fadein_delay = 90, g_fadein_frames = 20;
+static int g_fadein_delay = 30, g_fadein_frames = 10;
 static bool g_fadein_done = true;
 
 static int fade_log_hook(Cpu *c, uint64_t addr) {
@@ -162,7 +201,7 @@ static int field_hook(Cpu *c, uint64_t addr) {
 static int dtor_hook(Cpu *c, uint64_t addr) {
     LOG("[wild] f%llu class A object %llx destroyed\n", (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0]);
     g_active = false;
-    g_end_frame = (long)renderer_present_count();
+    g_end_frame = g_dbg_frame = (long)renderer_present_count();
     if (g_fadein_on) g_fadein_done = false;
     (void)addr;
     return 0;
@@ -174,6 +213,18 @@ static int ctor_hook(Cpu *c, uint64_t addr) {
     if (g_pending) {
         g_pending = false;
         R64(self, 0x98) = WILD_HASH;
+        // as the script native CallWildBattle (f_700017e440) sets them after the factory: hash, a0 = a1 = 0, a2 = 1,
+        // a3..a5 = !(flag bits 3, 1, 2) of the script's flags argument (0 here: all 1), a6 = 0 unless a special case
+        // (the constructor's defaults are a0 = a1 = 1, a2 = 0 and would be wrong). LARECOMP_WILDBATTLE_RAWCTOR=1 keeps them.
+        if (!getenv("LARECOMP_WILDBATTLE_RAWCTOR")) {
+            R8(self, 0xa0) = 0;
+            R8(self, 0xa1) = 0;
+            R8(self, 0xa2) = 1;
+            R8(self, 0xa3) = 1;
+            R8(self, 0xa4) = 1;
+            R8(self, 0xa5) = 1;
+            R8(self, 0xa6) = 0;
+        }
         if (g_a6) R8(self, 0xa6) = 1;
         LOG("[wild] class A object %llx: hash %llx, flags a0..a5 %02x%02x%02x%02x%02x%02x a6 %02x, state %u\n", (unsigned long long)self,
             (unsigned long long)R64(self, 0x98), R8(self, 0xa0), R8(self, 0xa1), R8(self, 0xa2), R8(self, 0xa3), R8(self, 0xa4),
@@ -186,8 +237,6 @@ static int ctor_hook(Cpu *c, uint64_t addr) {
 // the parsed record (f_70002bab70): +0 hash, +8 species, +0xc form, +0xd level, +0x10 shiny, +0x14 gender, +0x18 nature,
 // +0x20/+0x28 text references, +0x30 ability, +0x34..+0x40 moves (u32), +0x44/+0x46 V1/V2, +0x48 IVs, +0x4e EVs,
 // +0x54..+0x58 stat boosts
-static uint8_t g_rec[0x60] __attribute__((aligned(16)));
-
 static void log_record(const char *what, const uint8_t *r) {
     uint32_t sp = *(const uint32_t *)(r + 8);
     LOG("[wild] %s: hash %llx species %u form %u level %u shiny %u gender %u nature %u ability %u moves %u,%u,%u,%u\n", what,
@@ -257,6 +306,8 @@ __attribute__((constructor)) static void wildbattle_init(void) {
     }
     rt_register_fnhook(STATIC_CTOR, ctor_hook);
     rt_register_fnhook(TABLE_LOOKUP, lookup_hook);
+    if (getenv("LARECOMP_WILDBATTLE_USECFG")) g_usecfg = atoi(getenv("LARECOMP_WILDBATTLE_USECFG")) != 0;
+    if (g_usecfg) rt_register_fnhook(CONFIG_FROM_RECORD, config_hook);
     if (getenv("LARECOMP_WILDBATTLE_STATE_LOG")) rt_register_fnhook(0x7000289b40ull, state_hook);
 #ifdef _WIN32
     if (getenv("LARECOMP_WILDBATTLE_DEBUG")) CreateThread(NULL, 0, debug_thread, NULL, 0, NULL);
