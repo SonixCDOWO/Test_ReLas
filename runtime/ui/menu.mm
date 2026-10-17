@@ -25,6 +25,20 @@ void input_reset(void);
 bool input_finger_cursor(float *x, float *y, bool *down);  // runtime/hle/input.c
 }
 
+// ------------------------------------------------------------------ language
+// The overlay speaks English, Portuguese or Russian (issue #1), from the system's language; LARECOMP_LANG=en|pt|ru
+// chooses. The launcher has its own strings (runtime/ui/launcher_lg.mm).
+static int g_mlang;  // 0 English, 1 Portuguese, 2 Russian
+static void pick_menu_language(void) {
+    const char *e = getenv("LARECOMP_LANG"), *lang = e && *e ? e : "";
+    SDL_Locale **l = NULL;
+    int n = 0;
+    if (!*lang && (l = SDL_GetPreferredLocales(&n)) && n > 0 && l[0]->language) lang = l[0]->language;
+    g_mlang = !strncmp(lang, "pt", 2) ? 1 : !strncmp(lang, "ru", 2) ? 2 : 0;
+    SDL_free(l);
+}
+#define M(en, pt, ru) (g_mlang == 2 ? (ru) : g_mlang == 1 ? (pt) : (en))
+
 // ------------------------------------------------------------------ state shared with the main thread
 static std::atomic<bool> g_open{false};  // the "close the game?" question is up
 static std::atomic<bool> g_want_fullscreen_apply{false};
@@ -259,6 +273,7 @@ static void style_init(void) {
 
 static void init(void) {
     IMGUI_CHECKVERSION();
+    pick_menu_language();
     g_ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(g_ctx);
     ImGuiIO &io = ImGui::GetIO();
@@ -267,7 +282,7 @@ static void init(void) {
     io.IniFilename = NULL;
     ImFontConfig cfg;
     cfg.OversampleH = 2;
-    static const ImWchar ranges[] = {0x20, 0xFF, 0};  // (Latin-1: Portuguese accents)
+    static const ImWchar ranges[] = {0x20, 0xFF, 0x400, 0x45F, 0};  // (Latin-1: Portuguese accents; Cyrillic)
     const char *paths[] = {"C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                            "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"};
     for (const char *p : paths) {
@@ -323,7 +338,7 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
     ImGui::Begin("##kbd", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                     ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::PushFont(g_font_big);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "Digite o nome");
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Enter a name", "Digite o nome", "Введите имя"));
     ImGui::PopFont();
     static bool was_open, was_pad;
     bool pad = g_last_pad.load(), appearing = !was_open || pad != was_pad;  // (switching device: focus the new one)
@@ -337,7 +352,9 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
                          [](ImGuiInputTextCallbackData *d) -> int { return d->EventChar < 0x20 ? 1 : 0; });
         ImGui::PopFont();
         if ((int)strlen(g_kbd_text) > g_kbd_max) g_kbd_text[g_kbd_max] = 0;
-        ImGui::TextDisabled("Enter  confirma      Esc  cancela      (%d / %d)", (int)strlen(g_kbd_text), g_kbd_max);
+        ImGui::TextDisabled("%s      (%d / %d)", M("Enter  confirms      Esc  cancels", "Enter  confirma      Esc  cancela",
+                                                   "Enter  готово      Esc  отмена"),
+                            (int)strlen(g_kbd_text), g_kbd_max);
     } else {  // controller: on-screen keyboard (osk.mm)
         int r = osk_keys(g_kbd_text, sizeof g_kbd_text, g_kbd_max, appearing, scale, g_font_big);
         if (r) g_kbd = r > 0 ? 2 : 3;  // (Start / + confirms in menu_handle_event too)
@@ -375,21 +392,22 @@ static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::Begin("##quit", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                      ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::PushFont(g_menu_font);
-    ImGui::TextUnformatted("Deseja fechar o jogo?");
-    ImGui::TextDisabled("O progresso desde o último save será perdido.");
+    ImGui::PushFont(g_mlang == 2 ? g_font : g_menu_font);  // (Baloo has no Cyrillic: Segoe UI for Russian)
+    ImGui::TextUnformatted(M("Close the game?", "Deseja fechar o jogo?", "Закрыть игру?"));
+    ImGui::TextDisabled("%s", M("Progress since the last save will be lost.", "O progresso desde o último save será perdido.",
+                                "Прогресс после последнего сохранения будет потерян."));
     ImGui::Spacing();
     float bw = 220 * scale;
     static bool focus_no;
     if (!focus_no) { ImGui::SetKeyboardFocusHere(1); focus_no = true; }
-    if (ImGui::Button("Sim", ImVec2(bw, 0))) {
+    if (ImGui::Button(M("Yes", "Sim", "Да"), ImVec2(bw, 0))) {
         settings_save();
         SDL_Event q = {};
         q.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&q);
     }
     ImGui::SameLine();
-    bool no = ImGui::Button("Não", ImVec2(bw, 0));
+    bool no = ImGui::Button(M("No", "Não", "Нет"), ImVec2(bw, 0));
     if (no || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         set_open(false);
         focus_no = false;
