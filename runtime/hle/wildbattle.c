@@ -97,9 +97,31 @@ static int trigger_hook(Cpu *c, uint64_t addr) {
     return 1;
 }
 
+// Research (LARECOMP_WILDBATTLE_DEBUG=1): 240 presents after the battle's process is gone, dump the frame's render passes
+// (build/pass_NNN.png) and every draw (the F9 request of the renderer): what a black screen after the battle is made of.
+extern volatile int g_debug_frame_request;
+static volatile long g_end_frame;
+
+#ifdef _WIN32
+#include <windows.h>
+static DWORD WINAPI debug_thread(LPVOID unused) {
+    (void)unused;
+    for (;;) {
+        Sleep(50);
+        if (g_end_frame && (long)renderer_present_count() >= g_end_frame + 240) {
+            LOG("[wild] f%llu debug dump requested\n", (unsigned long long)renderer_present_count());
+            g_debug_frame_request = 1;
+            g_end_frame = 0;
+        }
+    }
+    return 0;
+}
+#endif
+
 static int dtor_hook(Cpu *c, uint64_t addr) {
     LOG("[wild] f%llu class A object %llx destroyed\n", (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0]);
     g_active = false;
+    g_end_frame = (long)renderer_present_count();
     (void)addr;
     return 0;
 }
@@ -111,8 +133,9 @@ static int ctor_hook(Cpu *c, uint64_t addr) {
         g_pending = false;
         R64(self, 0x98) = WILD_HASH;
         if (g_a6) R8(self, 0xa6) = 1;
-        LOG("[wild] class A object %llx: hash %llx, flags a0..a2 %02x%02x%02x a6 %02x, state %u\n", (unsigned long long)self,
-            (unsigned long long)R64(self, 0x98), R8(self, 0xa0), R8(self, 0xa1), R8(self, 0xa2), R8(self, 0xa6), R32(self, 0x68));
+        LOG("[wild] class A object %llx: hash %llx, flags a0..a5 %02x%02x%02x%02x%02x%02x a6 %02x, state %u\n", (unsigned long long)self,
+            (unsigned long long)R64(self, 0x98), R8(self, 0xa0), R8(self, 0xa1), R8(self, 0xa2), R8(self, 0xa3), R8(self, 0xa4),
+            R8(self, 0xa5), R8(self, 0xa6), R32(self, 0x68));
     }
     c->x[30] = lr;
     return 1;
@@ -184,6 +207,9 @@ __attribute__((constructor)) static void wildbattle_init(void) {
     rt_register_fnhook(STATIC_CTOR, ctor_hook);
     rt_register_fnhook(TABLE_LOOKUP, lookup_hook);
     if (getenv("LARECOMP_WILDBATTLE_STATE_LOG")) rt_register_fnhook(0x7000289b40ull, state_hook);
+#ifdef _WIN32
+    if (getenv("LARECOMP_WILDBATTLE_DEBUG")) CreateThread(NULL, 0, debug_thread, NULL, 0, NULL);
+#endif
     LOG("[wild] on: species %d level %d moves %d,%d,%d,%d (max %d battle(s))\n", g_species, g_level, g_moves[0], g_moves[1],
         g_moves[2], g_moves[3], g_max);
 }
