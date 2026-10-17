@@ -149,6 +149,9 @@ O código, no `main`:
 **Ferramenta nova**: `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n registros>`) varre a memória
 mapeada do guest (Windows, `runtime/hle/memscan.c`) e loga cada acerto, os 0x40 bytes e quem aponta para a base.
 
+> **Estado em 17/10/2026:** funciona (experimental). Resumo, sintomas e correções no [HISTORICO.md](HISTORICO.md), seção
+> "Modo batalhas selvagens". As etapas abaixo são o diário da pesquisa.
+
 ## Etapa 4 (17/10/2026): o protótipo funciona; os nativos de script do jogo
 **Protótipo** (`runtime/hle/wildbattle.c`, `LARECOMP_WILDBATTLE=1`): o gancho no `305ad0` (o gatilho do toque num
 selvagem, que chama a captura e depois configura o handle devolvido, por isso é substituído inteiro) cria o processo da

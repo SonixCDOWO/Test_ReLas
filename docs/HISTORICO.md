@@ -218,3 +218,32 @@ Controller) vira a mira como o mouse. `runtime/hle/input.c` liga `SDL_SENSOR_GYR
 `SDL_EVENT_GAMEPAD_SENSOR_UPDATE` (rad/s × tempo entre amostras) em yaw/pitch do giroscópio virtual, só enquanto o jogo
 mira; zona morta de 0,015 rad/s contra o viés em repouso, amostras com intervalo > 100 ms descartadas. Opções:
 `pad_gyro_sens` (launcher) e `LARECOMP_GYRO_PAD_FLIP`. Compila (`input.o`, `settings.o`); sentido dos eixos por conferir.
+
+## Modo "batalhas selvagens" (17/10/2026, experimental)
+Ideia: ao encostar num Pokémon selvagem, em vez da captura estilo Pokémon GO, uma batalha clássica e, depois, a captura,
+como o jogo já faz com o Snorlax, as aves lendárias e o Mewtwo. Detalhes e endereços em [MODO-BATALHA.md](MODO-BATALHA.md);
+código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental)" no launcher (`wild_battle = 1` no
+`larecomp.ini`) ou `LARECOMP_WILDBATTLE=1`.
+- **Como funciona.** As batalhas "estáticas" são o processo da classe A (fábrica `17f0a0`), que lê o registro de
+  `bin/script_event_data/event_encount.bin` pelo hash em `[obj+0x98]`. O gancho no gatilho do toque (`305ad0`, substituído
+  inteiro: a função original configura depois o handle da cena de captura, que um processo de batalha não aceita) cria
+  esse processo; o gancho no construtor grava um hash nosso; o gancho na busca (`2bad00`) responde com uma cópia do
+  registro do Snorlax com espécie, forma, nível, gênero e IVs do Pokémon tocado (lidos do objeto `P` do construtor da
+  configuração: nível = byte `P+0xf0c`, IVs = `P+0xf18..0xf2c`, gênero = `P+0x40c`) e os golpes por nível da
+  `waza_oboe.gfpak`. Depois da batalha, a captura do mesmo Pokémon é o fluxo nativo.
+- **Sintoma: tela preta ao voltar ao mundo.** Diagnóstico: o mundo era desenhado (passes grandes) e só os passes finais
+  saíam pretos; `LARECOMP_DEBUG_FRAME`/`g_debug_frame_request` e o log das chamadas de fade (`11ece0`, `11ee50`) mostraram um
+  fade out tipo 1 ao fim da captura e **nenhum fade in** até a próxima captura começar sozinha. Causa: o script do evento
+  (`FadeOut_` -> `CallWildBattle` -> `GetWildBattleResult_` -> `FadeIn_`) faz o fade in; nós pulamos o script. Correção: o
+  gancho no `2f78d0` (o mundo, todo quadro) repete 30 quadros depois da batalha um fade in do tipo do último fade out.
+- **Sintoma: batalha começava com flags trocadas.** `CallWildBattle` grava `a0 = a1 = 0, a2 = 1` e o construtor deixa
+  `a0 = a1 = 1, a2 = 0`; copiamos os valores do script.
+- **Sintoma: queda ao copiar a "configuração real".** Duas tentativas de lançar a configuração (0x2b8 bytes) do Pokémon
+  por cima da da batalha derrubaram o jogo: o objeto de `x0` no gatilho tem 0xb8 bytes (não é a configuração) e a que o
+  construtor devolve ainda estava com a espécie zerada. Desligado (`LARECOMP_WILDBATTLE_USECFG`, padrão 0); o caminho que
+  funciona é ler os campos de `P` e montar o registro.
+- **Lições.** (1) Procure primeiro o que a comunidade (pkNX) e o próprio jogo já dizem: os nomes dos nativos de script
+  estavam em strings do `main`. (2) Roteirizar o teste (`LARECOMP_INPUT`) e salvar imagens a cada N quadros mostrou em
+  minutos o que três rodadas manuais não mostraram. (3) O `LARECOMP_HOOK_DUMP` exige o endereço completo do guest.
+- **Falta:** XP dividido (metade ao derrotar, metade ao capturar), natureza e shiny do Pokémon tocado, formas
+  regionais (a tabela de golpes usa o índice da espécie), batalha de Pokémon grandes/auras e teste em mais áreas.
