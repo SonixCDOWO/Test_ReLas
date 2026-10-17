@@ -177,6 +177,21 @@ nomes**, só hashes.
   bui,poke_get,legend,legend_get,loading}_{in,out,keep}`.
 - O script faz FadeOut -> CallWildBattle -> (espera) -> GetWildBattleResult_ -> FadeIn..., o que o protótipo não faz.
 
+## Etapa 5 (17/10/2026): XP dividido, o que se sabe e o que não deu
+Objetivo: metade do XP ao "derrotar" (no fluxo dos lendários o Pokémon não desmaia: a batalha termina e começa a captura) e
+a outra metade na captura. **Não implementado.** O que a pesquisa trouxe:
+- A tela de recompensa da captura mostra o XP: **Metapod nível 5 = 20**, **Pidgey nível 4 = 11** ("Bonus Multiplier 1.0,
+  Successful Catch", "Exp. Points"); depois vem a tela da equipe ("Oddish grew to Lv. 9!"). Uma batalha de treinador mostra
+  "Your party Pokémon in waiting also got Exp. Points!" (o XP de batalha é concedido por outro caminho).
+- Não achei a função que soma o XP. Tentativas: `PokePartyAddParam` (`197bb0`, nativo de script) delega a uma função por membro
+  (`19aab0`) e ao objeto Pokémon (`[obj+0x98]` = CoreParam; `727fe0` é amizade, `725100`/`725800` EVs/IVs por índice);
+  as constantes de XP do nível 100 não aparecem no código (as curvas vêm de `bin/pokelib/grow_table`); a comparação de perfis
+  de funções (fugir x capturar) e a busca de PB7 no heap deram ambiguidade/falsos positivos; as fotos do heap
+  (`LARECOMP_SNAP`) funcionam mas o heap tem contadores demais para isolar o delta.
+- Caminhos que ainda valeriam: vigiar (`LARECOMP_WATCH`) o XP de um membro **conhecido** com o endereço achado por uma
+  captura jogada à mão no mesmo boot; ou achar a função que escreve a tela "Exp. Points" (o valor 20/11 passa por um
+  `SetNumber` de mensagem); ou somar o XP por conta própria depois de achar o campo.
+
 ## Próximas etapas
 3. Confirmar o caminho alternativo (`289c4c` → `28bda0`, modo 3) e a captura pós-batalha (`319e20` → `31a0e0`) em
    execução: o ideal é um save perto de uma batalha selvagem nativa (lendário ou Snorlax); sem isso, forçar o
