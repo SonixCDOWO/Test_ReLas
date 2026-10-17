@@ -34,3 +34,22 @@ Open an issue with:
   assumptions holds for Let's Go (formats, controller styles, return codes, reported resolution).
 - To change the game's behavior without rebuilding the game code library, use the function hooks
   (`runtime/fnhook.c`).
+
+## Commit messages
+
+Commits are written in **English** and follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <summary in the imperative, lowercase, no period>
+
+<optional body: what changed and why, wrapped at ~100 columns>
+```
+
+- **type:** `feat` (a new feature or option), `fix` (a bug fix), `docs` (documentation only), `perf`, `refactor`,
+  `test`, `build` (Makefile, release packaging), `chore` (versions, housekeeping); research tools that only help
+  debugging are `chore(debug)` or `feat(debug)` when they add a new tool.
+- **scope** (optional): the area, e.g. `fps60`, `renderer`, `input`, `launcher`, `wild-battle`, `release`.
+- Examples: `feat(fps60): run the overworld at 60 fps natively`, `fix(input): add a dead zone to controller
+  sticks`, `docs: record the aura flicker as an open issue`.
+- No `Co-Authored-By` or tool attribution lines.
+- Documentation inside `docs/` stays in Portuguese; commit messages, code comments and the README are in English.
