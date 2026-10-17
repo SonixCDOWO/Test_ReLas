@@ -118,10 +118,52 @@ static DWORD WINAPI debug_thread(LPVOID unused) {
 }
 #endif
 
+// The game's screen fade (the script natives FadeIn_/FadeOut_, f_70001a7680 / f_70001a7860, end in these): the manager is
+// [[*GOT 0x70015facf8]]. f_700011ece0(manager, 0, type, frames) fades in; f_700011ee50(manager, 0, type, ...) is the
+// fade-out the object factories and FadeOut_ use. A script fades out before the battle and in after it; ours has no script,
+// so (LARECOMP_WILDBATTLE_FADEIN=1) the last fade-out's type is repeated as a fade-in some presents after the battle.
+#define FADE_IN_FN 0x700011ece0ull
+#define FADE_OUT_FN 0x700011ee50ull
+#define GOT_FADE 0x70015facf8ull
+#define FIELD_UPDATE 0x70002f8bb0ull
+static int g_fade_type = 1, g_fade_seen;
+static bool g_fadein_on;
+static int g_fadein_delay = 90, g_fadein_frames = 20;
+static bool g_fadein_done = true;
+
+static int fade_log_hook(Cpu *c, uint64_t addr) {
+    LOG("[wild] f%llu fade %s: x1 %llx x2(type) %llx x3 %llx x4 %llx x5 %llx\n", (unsigned long long)renderer_present_count(),
+        addr == FADE_IN_FN ? "in " : "out", (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3],
+        (unsigned long long)c->x[4], (unsigned long long)c->x[5]);
+    if (addr == FADE_OUT_FN) { g_fade_type = (int)c->x[2]; g_fade_seen = 1; }
+    return 0;
+}
+
+static int field_hook(Cpu *c, uint64_t addr) {
+    (void)addr;
+    if (!g_fadein_done && g_end_frame && (long)renderer_present_count() >= g_end_frame + g_fadein_delay) {
+        g_fadein_done = true;
+        uint64_t save[32], lr = c->x[30], sp = c->sp;
+        memcpy(save, c->x, sizeof save);
+        c->x[0] = R64(R64(GOT_FADE, 0), 0);
+        c->x[1] = 0;
+        c->x[2] = (uint64_t)g_fade_type;
+        c->x[3] = (uint64_t)g_fadein_frames;
+        LOG("[wild] f%llu fading in by hand: manager %llx type %d frames %d (last fade-out %s)\n",
+            (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0], g_fade_type, g_fadein_frames, g_fade_seen ? "seen" : "NOT seen");
+        rt_call_original(c, FADE_IN_FN);
+        memcpy(c->x, save, sizeof save);
+        c->x[30] = lr;
+        c->sp = sp;
+    }
+    return 0;  // (the world's update runs)
+}
+
 static int dtor_hook(Cpu *c, uint64_t addr) {
     LOG("[wild] f%llu class A object %llx destroyed\n", (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0]);
     g_active = false;
     g_end_frame = (long)renderer_present_count();
+    if (g_fadein_on) g_fadein_done = false;
     (void)addr;
     return 0;
 }
@@ -204,6 +246,15 @@ __attribute__((constructor)) static void wildbattle_init(void) {
     rt_register_fnhook(ENCOUNTER_TRIGGER, trigger_hook);
     rt_register_fnhook(CLASS_A_DTOR0, dtor_hook);
     rt_register_fnhook(CLASS_A_DTOR1, dtor_hook);
+    rt_register_fnhook(FADE_IN_FN, fade_log_hook);
+    rt_register_fnhook(FADE_OUT_FN, fade_log_hook);
+    if (getenv("LARECOMP_WILDBATTLE_FADEIN")) {
+        g_fadein_on = atoi(getenv("LARECOMP_WILDBATTLE_FADEIN")) != 0;
+        if (g_fadein_on) rt_register_fnhook(FIELD_UPDATE, field_hook);
+        if (getenv("LARECOMP_WILDBATTLE_FADE_TYPE")) { g_fade_type = atoi(getenv("LARECOMP_WILDBATTLE_FADE_TYPE")); g_fade_seen = 1; }
+        if (getenv("LARECOMP_WILDBATTLE_FADE_DELAY")) g_fadein_delay = atoi(getenv("LARECOMP_WILDBATTLE_FADE_DELAY"));
+        if (getenv("LARECOMP_WILDBATTLE_FADE_FRAMES")) g_fadein_frames = atoi(getenv("LARECOMP_WILDBATTLE_FADE_FRAMES"));
+    }
     rt_register_fnhook(STATIC_CTOR, ctor_hook);
     rt_register_fnhook(TABLE_LOOKUP, lookup_hook);
     if (getenv("LARECOMP_WILDBATTLE_STATE_LOG")) rt_register_fnhook(0x7000289b40ull, state_hook);
