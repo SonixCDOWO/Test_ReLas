@@ -10,8 +10,8 @@ Peiikai, the static recompilation of *The Legend of Zelda: Link's Awakening*, ad
 engine.
 
 **Highlights:** up to **4K** internal resolution (supersampled on smaller screens) · **SMAA** anti-aliasing (the
-original has none) · **16x anisotropic filtering** · the game's own **30 fps**, locked and stable · keyboard, mouse
-and any controller · fan translations in one click.
+original has none) · **16x anisotropic filtering** · the game's own **30 fps**, locked and stable, or an experimental **60 fps** overworld · experimental **wild battles** ·
+keyboard, mouse and any controller · fan translations in one click.
 
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Pokémon: Let's Go, Eevee!*
@@ -133,6 +133,11 @@ Settings (`larecomp.ini`), saves (`save\`), the game files (`extracted\`), trans
   controls and acts as your finger on the touch screen.
 - **Controllers:** through SDL 3's gamepad support, with the handheld-mode layout (tested with one gamepad so far). Play with Eevee works with a controller alone (the right stick moves a virtual finger).
 - **Translations and mods:** Atmosphere-style LayeredFS mods, installed from the downloaded file with one click.
+- **Experimental options** (start screen, off by default):
+  - **60 fps:** the overworld at 60 fps natively (the game's time step is halved there, so nothing speeds up); menus
+    and the Pokédex shown at 60 with an in-between frame; battles and captures stay at 30 fps;
+  - **Wild battles:** touching a wild Pokémon starts a classic battle against it (species, level, gender, IVs,
+    level-up moves), then the capture. Details in [docs/MODO-BATALHA.md](docs/MODO-BATALHA.md) (Portuguese).
 
 ## Controls
 
@@ -195,6 +200,8 @@ scripted input runs (recorded inputs replayed frame by frame, see [docs/DEPURACA
 | Resolutions 720p, 1080p, 1440p, 4K; windowed, resized, fullscreen | ✅ (4K renders at ~78 fps uncapped on an RTX 3080) |
 | PT-BR fan translation (texts, menus, translated images) | ✅ |
 | Keyboard rebinding; playing with a controller | ✅ |
+| 60 fps (experimental): world, menus and Pokédex at 60 without speed-ups; battles and captures at normal speed | ✅ played |
+| Wild battles (experimental): battle, then capture, back to the world (Route 1) | ✅ played |
 
 **Not tested yet:** the rest of the story past Viridian City (gyms, other cities and caves, the Elite Four), every
 move animation and every Pokémon, AMD and Intel GPUs, laptops, other Windows versions, Steam Deck / Linux.
@@ -205,9 +212,12 @@ move animation and every Pokémon, AMD and Intel GPUs, laptops, other Windows ve
   different executable and is not supported yet.
 - **Windows only.** The Linux code path comes from LAS Recomp and builds in principle, but has never been tested
   with this game.
-- **30 fps, not 60.** The game advances its logic one step per frame, so running it at 60 fps makes everything run
-  at double speed. A real 60 fps mode would need frame interpolation; the research is in
-  [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md) (Portuguese).
+- **60 fps is experimental and partial.** The game advances most of its logic one step per frame: only the
+  overworld follows the game's time step, so only it runs at 60 fps natively; battles and captures stay at 30.
+  The research is in [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md) (Portuguese).
+- **Wild battles are experimental:** experience is not split between the battle and the capture yet, and the
+  touched Pokémon's nature, shiny state and regional form are not carried over.
+- **Auras:** the colored aura of special wild Pokémon sometimes disappears for a single frame.
 - **First visit to an area:** the first time a new object appears on your PC it can show up a frame or two late
   while its shader is prepared. From then on the cache on disk covers it.
 - **Motion controls:** the gyro of controllers that have one (DualSense, Pro Controller) is not used yet; aim with
@@ -361,6 +371,11 @@ clique em **Selecionar pasta do jogo...** e escolha a pasta com o jogo extraído
 protegeu o computador" (o exe não tem assinatura digital), clique em **Mais informações** e **Executar assim mesmo**. O programa copia os arquivos e
 recompila o código do jogo para o seu PC (só uma vez; uns 13 minutos num i5-14600KF, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
 abre em português quando o Windows está em português.
+
+**Opções experimentais** (no launcher, desligadas por padrão): **60 fps** (o mundo a 60 fps de verdade, sem acelerar;
+menus e Pokédex suavizados; batalhas e capturas continuam a 30) e **Batalhas selvagens** (encostar num Pokémon
+selvagem começa uma batalha clássica contra ele e, depois, a captura). A **zona morta do analógico** do controle
+fica em "Teclado e mouse".
 
 ### Jogar em português (tradução PT-BR)
 

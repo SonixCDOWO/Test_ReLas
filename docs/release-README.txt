@@ -31,6 +31,11 @@ How to play
    takes a while (13 minutes measured on a 20-thread CPU, longer with fewer threads).
 5. Click Play.
 
+Experimental options (start screen, off by default)
+- 60 fps: the overworld at 60 fps without speed-ups; menus and the Pokedex smoothed; battles and captures stay at 30.
+- Wild battles: touching a wild Pokemon starts a classic battle against it, then the capture.
+The controller stick dead zone is under "Keyboard and mouse".
+
 Everything stays in this folder: settings (larecomp.ini), saves (save\), the game files (extracted\), translations
 (mods\) and the log (lasrecomp.log). To move or back up the game, move or copy the whole folder.
 

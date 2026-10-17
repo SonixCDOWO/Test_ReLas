@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0 (2026-10-17)
+
+Two experimental options on the start screen, both off by default:
+
+- **60 fps (experimental).** The overworld runs at 60 fps natively: the game's own time step is halved there, so
+  walking, the camera and the world's animations are smooth at the right speed. Menus and the Pokédex keep the game's
+  30 updates per second and are shown at 60 with an in-between frame. Battles and captures stay at 30 fps, as the game
+  made them (their timelines count frames; an in-between frame there was tried and left out). Tested by playing:
+  world, menus and Pokédex at 60 without speed-ups; battles and captures at normal speed.
+- **Wild battles (experimental).** Touching a wild Pokémon starts a classic battle against it (its species, level,
+  gender, IVs and level-up moves) and then the capture, like the game does with Snorlax and the legendary birds.
+  Played on Route 1. Not done yet: split experience, nature and shiny of the touched Pokémon, regional forms, Pokémon
+  with an aura; other areas not tested.
+
+Also:
+
+- **Controller stick dead zone**, adjustable on the start screen ("Keyboard and mouse"): a stick at rest no longer
+  moves the Poké Ball aim.
+- Known issue, also in 0.1.2: the colored aura of special wild Pokémon sometimes disappears for a single frame
+  ([docs/PROGRESSO.md](docs/PROGRESSO.md), item 6).
+
 ## 0.1.2 (2026-10-16)
 
 - **Fixes a crash at the title screen on a new game** (no save yet) in 0.1.1: the movie player looked for the
