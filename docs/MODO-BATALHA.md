@@ -42,6 +42,40 @@ chamar o início de batalha no lugar da captura; depois da batalha, iniciar a ca
     chamado pelo método virtual `319e20`, ao lado da sequência de batalha (`31a470`) - candidato a "batalha e depois
     captura" dos lendários.
 
+## Etapa 3 (parcial, 17/10/2026): o que a pesquisa estática e os dumps mostraram
+**Chamadores conferidos** (busca de `bl` direto para o endereço exato; o `xrefs.py calls` erra o início da função
+quando há padding antes dela):
+- `28ef70` (captura): `28ead8`, `305b34` (encontro selvagem), `31a140` (fn `31a0d8`), `854afc`. Confere com a etapa 2.
+- `28bc30` (iniciar batalha): só `28bb80` (script) e `28bdbc`; `28bb60` só `17e218`; `28bda0` só `289ce0`.
+
+**`289c4c` e `319e20` não são métodos soltos**: são casos da jump table de máquinas de estado (estado em
+`[obj+0x68]`) de duas classes com vtable própria. Classe A: vtable em `image+0x1546ea8` (slot da GOT `0x15ff050`),
+construtores a partir de `289ac0`, fábrica `17f098` (aloca `0xA8` bytes). Classe B: vtable em `image+0x154cb70` (GOT
+`0x15ff8c0`), construtor `318f50`, fábrica `291470` (aloca `0x100` bytes). As fábricas seguem o mesmo molde (alocar,
+construir, empilhar com `13a750(gerenciador, &objeto)`), o que sugere uma família grande de "processos".
+- Classe A, caso `289c4c`: monta `{u32 modo, ponteiro config}` com modo `3` se `[obj+0xA6] != 0`, senão `0`, config =
+  `[obj+0x90]`, e chama `28bda0`, que inicia a batalha (`28bc30`) e grava modo em `battle+0xb8` e config em `+0xc0`.
+  Depois chama `28dd20`/`28dd40` com as flags `[obj+0xa0..0xa2]`.
+- Classe B, caso `319e20`: chama `31a0e0` (que chama a captura `28ef70`) e devolve estado 4.
+- Ainda **não confirmado em execução** que A + B formem o fluxo "batalha e depois captura" dos lendários, e não sei
+  quem instancia as fábricas (são métodos virtuais, sem `bl` direto).
+
+**Dump de um encontro selvagem real** (`LARECOMP_HOOK_DUMP`, frame 1545 da Rota 1): `305ad0` recebe `x0` = objeto do
+Pokémon (vtable `0x70159c848`, campos `+8 = 2`, `+0x28 = 4`), `x1` = gerenciador; `28ef70` recebe `x0` = objeto de
+vtable `0x7001537770` (**a mesma classe do "pedido de batalha" do `28bb60`**) e `x1` = alocador do gerenciador global.
+Quem identifica a espécie/nível do Pokémon tocado ainda não foi lido.
+
+**Armadilhas dos testes** (para não repetir):
+- `LARECOMP_HOOK_DUMP` exige o endereço **completo do guest** (`700028ef70`), não o offset do `main` (`28ef70` não
+  dispara nada, sem erro).
+- O `fps60.c` registra ganchos em `28ef70` e `28bb60` quando `LARECOMP_SHOT_REL` está ligado, e o `teste60.sh` sempre
+  liga: o último gancho registrado vale, então o dump é anulado. Use `tools/repro.sh` direto com o roteiro.
+- O sorteio do encontro muda o resultado do mesmo roteiro: o "captura" às vezes cai numa batalha de treinador e o
+  "batalha" às vezes numa captura. Confira a imagem final ou o log antes de concluir.
+- Worktree: `extracted/`, `generated/` e `.venv/` entram como junctions; copie `build/lasgame.dll` **e
+  `build/lasgame.dll.id`** (sem o `.id` o runtime recusa a DLL: "built for another version") e compile só o runtime
+  (`make -j20 build/lasrecomp.exe`).
+
 ## Próximas etapas
 3. Confirmar o caminho alternativo (`289c4c` → `28bda0`, modo 3) e a captura pós-batalha (`319e20` → `31a0e0`) em
    execução: o ideal é um save perto de uma batalha selvagem nativa (lendário ou Snorlax); sem isso, forçar o
