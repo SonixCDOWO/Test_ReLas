@@ -23,6 +23,10 @@ From [issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1), with thanks
 - The overlay (close the game?, name entry) speaks English, Portuguese or Russian, from the system language
   (`LARECOMP_LANG=en|pt|ru`).
 - Crash reports list the last calls to the host, and the previous run's log is kept as `lasrecomp-prev.log`.
+- Tested with the zip downloaded from this release, unzipped twice without development tools on PATH: Eevee 1.0.0
+  and Pikachu 1.0.0 set up from `exefs` + `romfs.bin` / `romfs` (13 minutes each), an Eevee save in Viridian City with
+  the PT-BR translation and 60 fps in the world, and a new Pikachu game with the translation installed from its `.rar`
+  (Professor Oak's lines in Portuguese).
 
 ## 0.2.0 (2026-10-17)
 
