@@ -20,6 +20,11 @@ Also:
   moves the Poké Ball aim.
 - Known issue, also in 0.1.2: the colored aura of special wild Pokémon sometimes disappears for a single frame
   ([docs/PROGRESSO.md](docs/PROGRESSO.md), item 6).
+- Tested with the zip downloaded from this release, in a new folder without development tools on PATH: setup from a
+  game folder with `exefs` and `romfs` (13 minutes to recompile on a 20-thread CPU), a new game through the controller
+  screen, the title movie, Professor Oak and the character and name screens, and the Brazilian Portuguese fan
+  translation installed from its downloaded `.rar` (Professor Oak's lines in Portuguese). With both options on (another
+  clean folder): the world at 60 fps and a classic battle started by touching a wild Pidgey.
 
 ## 0.1.2 (2026-10-16)
 
