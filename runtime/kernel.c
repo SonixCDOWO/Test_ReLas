@@ -476,8 +476,16 @@ static uint32_t svc_wait_synchronization(uint64_t handles_ptr, int32_t count, in
     }
     for (;;) {
         for (int i = 0; i < count; i++) {
+            // (an empty slot, e.g. a Bluetooth event the game never got: wait on the others, as issue #1 found in the
+            // GO Park settings; a wait on nothing but empty slots still ends in the timeout below)
+            if (!hs[i]) continue;
             KObject *o = handle_get(hs[i]);
-            if (!o) { r = R_INVALID_HANDLE; goto out; }
+            if (!o) {
+                LOG("[kernel] WaitSynchronization: invalid handle %#x at [%d] of %d (lr %llx)\n", hs[i], i, count,
+                    (unsigned long long)(t ? t->cpu.x[30] : 0));
+                r = R_INVALID_HANDLE;
+                goto out;
+            }
             if (o->signaled) { *index = i; r = R_OK; goto out; }
         }
         if (t->cancel) { t->cancel = false; r = R_CANCELLED; goto out; }
@@ -593,7 +601,17 @@ static void svc_entry(Cpu *c, uint32_t imm, uint64_t pc) {
         return;
     }
     if (trace_svc < 0) trace_svc = getenv("LARECOMP_TRACE_SVC") != NULL;
-    if (!trace_svc) return svc_impl(c, imm, pc);
+    if (!trace_svc) {
+        uint64_t a0 = c->x[0], a1 = c->x[1], lr = c->x[30];
+        svc_impl(c, imm, pc);
+        static int nbad;  // (the first ones: which call got a handle that doesn't exist, for crash reports)
+        if (c->x[0] == R_INVALID_HANDLE && nbad < 16) {
+            nbad++;
+            LOG("[kernel] svc %02x(%llx, %llx) -> invalid handle (lr %llx)\n", imm, (unsigned long long)a0,
+                (unsigned long long)a1, (unsigned long long)lr);
+        }
+        return;
+    }
     uint64_t in[4] = {c->x[0], c->x[1], c->x[2], c->x[3]};
     svc_impl(c, imm, pc);
     LOG("[svc] %02x(%llx, %llx, %llx, %llx) -> %llx %llx %llx  @%llx\n", imm, in[0], in[1], in[2], in[3], c->x[0],

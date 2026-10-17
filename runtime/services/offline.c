@@ -20,6 +20,7 @@ static void btm_user_core(Service *s, IpcReq *req, IpcResp *resp) {
     switch (req->cmd) {
     case 0:   // AcquireBleScanEvent
     case 17:  // AcquireBleConnectionEvent
+    case 21:  // AcquireBlePairingEvent (the GO Park settings wait on it: without it they abort, issue #1)
     case 26:  // AcquireBleServiceDiscoveryEvent
     case 33:  // AcquireBleMtuConfigEvent
         OUT(uint8_t, 0) = 1;
