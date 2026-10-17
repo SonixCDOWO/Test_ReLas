@@ -50,11 +50,34 @@ static int g_a6;
 // [[*GOT 0x70015faab8]+0x68] the allocator (both as in the game's call to f_700028ef70).
 static bool g_active;  // a static battle process of ours is alive: the touch that keeps calling the trigger is swallowed
 
+// Research: the game's own species / form accessors (f_70003058f0 reads them from [x22] to build the capture's
+// configuration), tried on the objects the trigger gets, to find which one is the touched Pokémon's data.
+static void probe_identity(Cpu *c) {
+    uint64_t cand[3] = {c->x[0], c->x[0] - 0x48, R64(c->x[2], 0)};
+    const char *name[3] = {"x0", "x0-0x48", "*x2"};
+    uint64_t lr = c->x[30], sp = c->sp, save[32];
+    memcpy(save, c->x, sizeof save);
+    for (int i = 0; i < 3; i++) {
+        c->x[0] = cand[i];
+        rt_call_original(c, 0x70002185d0ull);
+        uint64_t species = c->x[0] & 0xffff;
+        c->x[0] = cand[i];
+        rt_call_original(c, 0x70002186a0ull);
+        uint64_t form = c->x[0] & 0xff;
+        LOG("[wild]   probe %-8s %llx -> species %llu form %llu\n", name[i], (unsigned long long)cand[i], (unsigned long long)species,
+            (unsigned long long)form);
+    }
+    memcpy(c->x, save, sizeof save);
+    c->x[30] = lr;
+    c->sp = sp;
+}
+
 static int trigger_hook(Cpu *c, uint64_t addr) {
     (void)addr;
     if (g_active) return 1;  // (swallowed: our battle is running)
     if (g_count >= g_max) return 0;  // (the game's capture runs)
     g_count++;
+    if (getenv("LARECOMP_WILDBATTLE_PROBE")) probe_identity(c);
     uint64_t lr = c->x[30];
     uint64_t mgr = R64(R64(c->x[1], 0), 0x68);
     uint64_t alloc = R64(R64(R64(GOT_ALLOCATOR, 0), 0), 0x68);
