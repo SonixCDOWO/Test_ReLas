@@ -214,7 +214,8 @@ extern "C" void launcher_lg_run(const char *root) {
     static const int res_lines[] = {0, 720, 1080, 1440, 2160};
     int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
-    bool full = g_settings.fullscreen, smaa = g_settings.antialias == AA_SMAA, fps60 = g_settings.fps == 60;
+    bool full = g_settings.fullscreen, smaa = g_settings.antialias == AA_SMAA, fps60 = g_settings.fps == 60,
+         wildb = g_settings.wild_battle;
     // Translation: the folders under mods/ (runtime/mods.h); 0 = none (the game's own English)
     static char mods[MODS_MAX][128];
     int nmods = mods_list(mods, MODS_MAX), mod = 0;
@@ -272,6 +273,10 @@ extern "C" void launcher_lg_run(const char *root) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", T("The world at 60 fps; menus and the Pokédex smoothed; battles and captures stay at 30.",
                                       "Mundo a 60 fps; menus e Pokédex suavizados; batalhas e capturas continuam a 30."));
+        ImGui::Checkbox(T("Wild battles (experimental)", "Batalhas selvagens (experimental)"), &wildb);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
+                                      "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
         const char *none = T("None (English)", "Nenhuma (inglês)");
         if (ImGui::BeginCombo(T("Translation", "Tradução"), mod ? mods[mod - 1] : none)) {
             if (ImGui::Selectable(none, mod == 0)) mod = 0;
@@ -311,6 +316,7 @@ extern "C" void launcher_lg_run(const char *root) {
     g_settings.fullscreen = full;
     g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
     g_settings.fps = fps60 ? 60 : 30;
+    g_settings.wild_battle = wildb;
     snprintf(g_settings.mod, sizeof g_settings.mod, "%s", mod ? mods[mod - 1] : "");
     settings_save();
     vk_imgui_backend_shutdown();

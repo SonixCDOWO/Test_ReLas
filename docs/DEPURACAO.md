@@ -24,6 +24,10 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `tools/teste60.sh <captura\|batalha> <0\|1\|2>` | a mesma cena a 30 fps e num modo 60, com imagens no mesmo tempo de jogo (`build/teste60/<cena>-<modo>/sheet.png`) |
 | Atenção | o `fnhook` guarda **um gancho por endereço**: o último registrado vale; duas sondas na mesma função se anulam |
 | `LARECOMP_DAYS_AHEAD=<n>` | relógio n dias à frente (coisas diárias: a fome do parceiro, que precisa ser maior que zero para ele comer) |
+| `LARECOMP_WILDBATTLE=1` (+ `LARECOMP_WILDBATTLE_*`) | batalhas selvagens (docs/MODO-BATALHA.md; o launcher liga igual). `SPECIES=<n>`/`LEVEL=<n>`: sempre esse Pokémon (padrão: o tocado); `MOVES=a,b,c,d`: esses golpes (padrão: por nível); `MAX=<n>`: batalhas por execução (padrão: todas); `FADEIN=0` desliga o fade in manual, `FADE_TYPE`/`FADE_DELAY`/`FADE_FRAMES` o ajustam; `LOGPOKE=1` loga os campos do objeto do Pokémon (`=2` grava `build/poke_<quadro>.bin`); `STATE_LOG=1` os estados do processo; `DEBUG=1` grava os passes de um quadro 240 quadros depois da batalha; `USECFG=1` (experimental, derruba o jogo) lança a configuração do construtor |
+| `LARECOMP_WATCH=<addr>[,<addr>...]` | vigia de escrita (Windows, `runtime/hle/memwatch.c`): protege a página desses endereços (palavras de 32 bits) e, a cada escrita neles, loga o backtrace de quem escreveu (funções do jogo como `f_<endereço>`). Os endereços do heap **não se repetem entre execuções** |
+| `LARECOMP_WATCH_PARTY=<quadro>` + `LARECOMP_WATCH_SPECIES=133:10,16:9,...` | procura, no heap, registros de 0x104 bytes no formato PB7 (espécie u16 em `+8`, XP u32 em `+0x10`, nível em `+0xEC`) e vigia o XP de cada um. A heurística acha muitos falsos positivos (a estrutura em memória pode não ser PB7 cru) |
+| `LARECOMP_SNAP=<quadro A>,<quadro B>` | copia as páginas não nulas do heap em A e, a cada 250 quadros a partir de B (30 vezes), lista os deltas pequenos mais comuns das palavras que cresceram (3 a 20 acertos) com endereços de exemplo; o ganho de XP de uma equipe é um delta compartilhado. O heap tem muito contador mudando, então o ruído é grande |
 | `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
 | `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |
 | `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher com a seção "Teclado e mouse" aberta / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |
@@ -104,7 +108,11 @@ Não ligue debug info nos shaders para capturar: com milhares de shaders, o repl
 - **Ganchos** (runtime/fnhook.c): toda função gerada passa por `FN_ENTER`, que chama `rt_fnhook` enquanto houver
   gancho registrado (`rt_register_fnhook(addr, fn)`; `fn` devolve 1 para tratar a chamada no lugar do jogo;
   `rt_call_original` roda a função original de dentro do gancho). Mudar comportamento não exige gerar a DLL de novo.
-- `LARECOMP_HOOK_DUMP="<addr>:<args>[;...]"` registra, nas primeiras `LARECOMP_HOOK_DUMP_MAX` (4) entradas, x0..x7 e a
+- `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n>`): varre a memória mapeada do guest por esses bytes
+  (ex.: o hash de um registro em little-endian) quando o jogo chega ao frame (padrão 1300) e loga cada acerto, os 0x40
+  bytes seguintes, `n` registros de 0x40 antes e os ponteiros para a base (runtime/hle/memscan.c, só Windows).
+- `LARECOMP_HOOK_DUMP="<addr>:<args>[;...]"` (endereço completo do guest, ex.: `700028ef70`; o offset do `main`
+  sozinho não dispara) registra, nas primeiras `LARECOMP_HOOK_DUMP_MAX` (4) entradas, x0..x7 e a
   memória dos argumentos: `x2:30` = 0x30 bytes em x2; `*x0:400` = 0x400 bytes no ponteiro guardado em x0.
 
 ### Referências cruzadas no código do jogo (`tools/xrefs.py`)

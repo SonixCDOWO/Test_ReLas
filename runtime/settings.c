@@ -68,6 +68,7 @@ void settings_load(void) {
         // (an older "antialias = off" was only LAS Recomp's default being saved: a new key, so SMAA starts on)
         else if (!strcmp(key, "smaa")) g_settings.antialias = atoi(val) != 0 ? AA_SMAA : AA_OFF;
         else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
+        else if (!strcmp(key, "wild_battle")) g_settings.wild_battle = atoi(val) != 0;
         else bind_settings_load(key, val);  // bind_pad_* / bind_key_*: runtime/hle/bindings.c
     }
     fclose(f);
@@ -99,6 +100,7 @@ void settings_save(void) {
     else if (g_settings.res_mode >= 1 && g_settings.res_mode <= 8) fprintf(f, "resolution = %dx\n", g_settings.res_mode);
     else fprintf(f, "resolution = match\n");
     fprintf(f, "dpad_move = %d\n", g_settings.dpad_move);
+    fprintf(f, "wild_battle = %d\n", g_settings.wild_battle);
     fprintf(f, "game_lang = %s\n", g_settings.game_lang);
     bind_settings_save(f);
     fclose(f);

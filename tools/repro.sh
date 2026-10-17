@@ -44,7 +44,7 @@ start=$(date +%s)
 ) &
 pid=$!
 last_png=$(printf "build/frames/frame_%05d.png" "$last")
-for _ in $(seq 1 240); do
+for _ in $(seq 1 "${WAIT:-240}"); do  # (WAIT=<seconds>: how long to wait for the last frame; long scenes need more)
     [ -f "$last_png" ] && break
     grep -q "FATAL\|exception c0" "logs/repro-$name.log" && { echo "CRASH: veja logs/repro-$name.log"; break; }
     sleep 1

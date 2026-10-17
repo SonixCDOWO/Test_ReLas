@@ -22,6 +22,7 @@ _Atualizado em 15/10/2026._
 | Personagens e Pokémon | modelos com esqueleto corretos, com animação (correção do `LDC.64` no tradutor de shaders) |
 | Gameplay | andar, encontro com o Professor, captura do Pikachu (mira centralizada) |
 | Save | salvar e carregar funcionam (`save/save_0/savedata.bin`) |
+| Batalhas selvagens (experimental, opção no launcher, desligada por padrão; `wild_battle = 1`) | encostar num Pokémon selvagem abre uma batalha clássica contra ele (espécie, nível, gênero, IVs e golpes por nível reais) e, depois, a captura; o mundo volta com fade in. Testado por roteiro e jogado por uma pessoa na Rota 1; falta XP dividido, natureza/shiny e mais áreas (HISTORICO, [MODO-BATALHA.md](MODO-BATALHA.md)) |
 
 ## O que falta
 1. **Validar o 3D em mais cenas** (batalhas, Pokémon grandes, cidades): a correção dos modelos com esqueleto foi
