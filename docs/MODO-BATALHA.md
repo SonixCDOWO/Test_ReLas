@@ -115,6 +115,40 @@ de "teletransporte" e de "lendário aparecer" mexem em posição e em flags (`bi
 memória do host, o runtime pode fazer o mesmo para **chegar a uma batalha nativa de Snorlax/lendário** e observar o
 fluxo de verdade, sem save adiantado.
 
+## Etapa 3c (17/10/2026): quem lê a tabela por hash = a classe A, o processo das batalhas estáticas
+(Correção: os "leitores" do `event_encount.bin` aparecem por `adrp`+`add` no início da **string** `+0x156` da tabela de
+strings em `image+0xf04000`, e não no ponto onde o nome do arquivo começa dentro dela, que foi o meu erro na busca.)
+
+A tabela **não está na memória durante o campo**: só `field_trade_data.bin` é lido no boot (`LARECOMP_LOG_FILES=1`);
+`event_encount.bin` e `add_poke.bin` são lidos **sob demanda**, quando um evento os pede. Varredura de memória do guest
+pelo hash do Snorlax no frame 1400 da Rota 1: 0 acertos (`LARECOMP_SCAN`, ver abaixo).
+
+O código, no `main`:
+- **Carregador da tabela** (classe com objeto de `0x140` bytes, ctor `2ba800`): `2ba920(this)` pede o arquivo
+  `bin/script_event_data/event_encount.bin` (string `+0x156`, via `70001d5150` e `70000a63d0`); `2baae0` diz se já
+  carregou (`1` quando `[this+0x130]` ou o arquivo pronto); `2bab70` percorre `tamanho >> 6` registros de 0x40 bytes,
+  converte cada um numa estrutura de 0x59 bytes (hash, espécie, forma, nível, shiny, gênero, natureza, habilidade,
+  golpes, IVs, EVs, aumentos) e insere num `unordered_map` com chave = hash (`2baea0`). **`2bad00(tabela, &chave)`** é a
+  busca: devolve `nó + 0x18` (o ponteiro para a estrutura). Usado só pelas classes dos estados `289b40` (A), `28e99c`
+  (`28ea90`, que chama a captura `28ef70`) e `28f454`.
+- **Classe A** (vtable `image+0x1546ea8`, objeto de `0xA8` bytes, fábrica `17f098`) é o processo da batalha estática:
+  `[+0x68]` estado; `[+0x88]` objeto da tabela; `[+0x90]` configuração de batalha (`0x2b8` bytes); **`[+0x98]` o hash
+  (u64) da batalha**; `[+0xa0..0xa2]` e `[+0xa6]` flags. Estados: 0 (`289b7c`) cria o objeto da tabela e pede o arquivo;
+  1 (`289e18`) espera (`2baae0`); 2 (`289e40`) aloca a configuração, **busca por `[+0x98]`** (`2bad00`) e preenche a
+  configuração com `2f60c0(config, registro)` (ela grava `[config+0x298] = 1` e copia espécie, nível etc.); 3 (`289c4c`)
+  inicia a batalha (`28bda0`, modo 3 se `[+0xa6] != 0`, senão 0) e depois `28dd20`/`28dd40`; 4 não lido.
+- A fábrica `17f098` é chamada de um método virtual (o comando de script do evento), que recebe o gerenciador de
+  processos e o alocador e depois preenche o hash e as flags no objeto devolvido (a confirmar).
+
+**Consequência para o protótipo** (duas opções, a segunda é a mais limpa):
+1. Criar a classe A pela fábrica `17f098` e gravar o hash do Snorlax em `[obj+0x98]` (batalha nativa de teste).
+2. **Gancho em `2bad00`**: se a chave for um hash nosso, devolver um registro sintético (estrutura de 0x59 bytes,
+   mesma disposição do parser) com a espécie, nível, gênero, natureza e IVs do Pokémon tocado; o resto do fluxo
+   (configuração, batalha, captura depois) é o do jogo.
+
+**Ferramenta nova**: `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n registros>`) varre a memória
+mapeada do guest (Windows, `runtime/hle/memscan.c`) e loga cada acerto, os 0x40 bytes e quem aponta para a base.
+
 ## Próximas etapas
 3. Confirmar o caminho alternativo (`289c4c` → `28bda0`, modo 3) e a captura pós-batalha (`319e20` → `31a0e0`) em
    execução: o ideal é um save perto de uma batalha selvagem nativa (lendário ou Snorlax); sem isso, forçar o
