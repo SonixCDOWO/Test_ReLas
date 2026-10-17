@@ -29,3 +29,12 @@ def _ring_counter(gen, a):
 
 
 PATCHES[0x70002d2a44] = _ring_counter
+
+
+# The addresses above are Let's Go Eevee 1.0.0's main (build id below). The same instructions in the other builds with
+# address tables (found with tools/addrmap.py; runtime/fnhook.c has the runtime's hooks): gen.py moves the patches
+# there, and generates any other build (an update) without them.
+EEVEE_100_BUILD = '0a3f0d21e67dad80'
+BUILD_ADDRS = {
+    '1c375692de4f4b87': {0x7000b88340: 0x7000b88350, 0x7000b6acc8: 0x7000b6acd8, 0x70002d2a44: 0x70002d2a14},  # Pikachu 1.0.0
+}

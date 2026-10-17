@@ -22,7 +22,12 @@
 #include "romfs_build.h"
 
 #define ROOT "extracted"  // (in the data root, the working directory)
-static const uint8_t BUILD_ID[8] = {0x0a, 0x3f, 0x0d, 0x21, 0xe6, 0x7d, 0xad, 0x80};  // Let's Go, Eevee! v1.0.0 main
+// The two games (program ids, main.npdm's ACI0), any version. The 60 fps and wild battles options and the generator's
+// instruction patches are addresses in the main: only the builds with address tables get them (game_build).
+#define TITLE_EEVEE 0x0100187003A36000ull
+#define TITLE_PIKACHU 0x010003F003A34000ull
+static const uint8_t EEVEE_100[8] = {0x0a, 0x3f, 0x0d, 0x21, 0xe6, 0x7d, 0xad, 0x80};    // Let's Go, Eevee! v1.0.0 main
+static const uint8_t PIKACHU_100[8] = {0x1c, 0x37, 0x56, 0x92, 0xde, 0x4f, 0x4b, 0x87};  // Let's Go, Pikachu! v1.0.0
 
 static _Atomic int g_state;
 static _Atomic float g_progress;
@@ -42,18 +47,68 @@ static bool is_file(const char *p) {
     return stat(p, &st) == 0 && S_ISREG(st.st_mode);
 }
 
-static bool build_id_ok(const char *main_path) {
-    FILE *f = fopen(main_path, "rb");
-    if (!f) return false;
+static uint64_t program_id(const char *exefs) {
+    char p[1100];
+    snprintf(p, sizeof p, "%s/main.npdm", exefs);
+    FILE *f = fopen(p, "rb");
+    if (!f) return 0;
+    uint64_t id = 0;
+    uint8_t meta[0x80], aci[0x18];  // ACI0 (offset at META+0x70): the program id at +0x10
+    if (fread(meta, 1, sizeof meta, f) == sizeof meta && !memcmp(meta, "META", 4) &&
+        !fseek(f, *(uint32_t *)(meta + 0x70), SEEK_SET) && fread(aci, 1, sizeof aci, f) == sizeof aci &&
+        !memcmp(aci, "ACI0", 4))
+        id = *(uint64_t *)(aci + 0x10);
+    fclose(f);
+    return id;
+}
+
+static bool game_ok(const char *exefs) {
+    uint64_t id = program_id(exefs);
+    return id == TITLE_EEVEE || id == TITLE_PIKACHU;
+}
+
+int game_build(const char *exefs) {
+    char p[1100];
+    snprintf(p, sizeof p, "%s/main", exefs);
+    FILE *f = fopen(p, "rb");
+    if (!f) return GAME_BUILD_OTHER;
     uint8_t id[8] = {0};
     fseek(f, 0x40, SEEK_SET);  // (NSO header: the module id)
     size_t n = fread(id, 1, 8, f);
     fclose(f);
-    return n == 8 && !memcmp(id, BUILD_ID, 8);
+    uint64_t pid = program_id(exefs);
+    if (n == 8 && !memcmp(id, EEVEE_100, 8) && pid == TITLE_EEVEE) return GAME_BUILD_EEVEE_100;
+    if (n == 8 && !memcmp(id, PIKACHU_100, 8) && pid == TITLE_PIKACHU) return GAME_BUILD_PIKACHU_100;
+    return GAME_BUILD_OTHER;
+}
+
+const char *game_version(const char *exefs) {
+    static const struct { uint8_t id[8]; const char *v; } k[] = {
+        {{0x0a, 0x3f, 0x0d, 0x21, 0xe6, 0x7d, 0xad, 0x80}, "1.0.0"},  // Eevee
+        {{0x1c, 0x37, 0x56, 0x92, 0xde, 0x4f, 0x4b, 0x87}, "1.0.0"},  // Pikachu
+        {{0xc2, 0x08, 0xdb, 0x6a, 0x4e, 0xf4, 0x36, 0x1f}, "1.0.2"},  // Pikachu (issue #1's log)
+    };
+    char p[1100];
+    snprintf(p, sizeof p, "%s/main", exefs);
+    uint8_t id[8] = {0};
+    FILE *f = fopen(p, "rb");
+    if (f) {
+        fseek(f, 0x40, SEEK_SET);
+        if (fread(id, 1, 8, f) != 8) memset(id, 0, 8);
+        fclose(f);
+    }
+    for (size_t i = 0; i < sizeof k / sizeof *k; i++)
+        if (!memcmp(id, k[i].id, 8)) return k[i].v;
+    return "1.0.0";  // (a build not listed here)
+}
+
+const char *game_name(const char *exefs) {
+    uint64_t id = program_id(exefs);
+    return id == TITLE_EEVEE ? "Eevee" : id == TITLE_PIKACHU ? "Pikachu" : NULL;
 }
 
 bool setup_ready(void) {
-    return build_id_ok(ROOT "/exefs/main") && is_file(ROOT "/romfs.bin") && gamelib_present(ROOT);
+    return game_ok(ROOT "/exefs") && is_file(ROOT "/romfs.bin") && gamelib_present(ROOT);
 }
 
 typedef struct { char exefs[1024], romfs[1024], romfs_bin[1024]; bool package; } Found;
@@ -134,10 +189,8 @@ static void *setup_thread(void *arg) {
     find_game(g_folder, 0, &f);
     LOG("[setup] %s: exefs %s, romfs %s, romfs.bin %s\n", g_folder, f.exefs[0] ? f.exefs : "-", f.romfs[0] ? f.romfs : "-",
         f.romfs_bin[0] ? f.romfs_bin : "-");
-    char main_path[1100];
-    snprintf(main_path, sizeof main_path, "%s/main", f.exefs);
     if (!f.exefs[0] || (!f.romfs[0] && !f.romfs_bin[0])) g_state = f.package ? SETUP_FAIL_PACKAGE : SETUP_FAIL_NOT_FOUND;
-    else if (!build_id_ok(main_path)) g_state = SETUP_FAIL_VERSION;
+    else if (!game_ok(f.exefs)) g_state = SETUP_FAIL_VERSION;
     else {
         // (the picked folder can't be our own copy: setting up again deletes that first)
         char a[4096], b[4096];
@@ -151,7 +204,18 @@ static void *setup_thread(void *arg) {
     mkdir(ROOT, 0755);
     g_state = SETUP_COPYING;
     g_phase0 = 0, g_phase1 = 0.01f;
-    bool ok = romfs_copy_tree(f.exefs, ROOT "/exefs", copy_progress);
+    bool ok = true;
+    if (!strcmp(f.exefs, f.romfs)) {  // (a flat dump, main next to bin/: only the six code files, not the whole RomFS)
+        static const char *const code[] = {"main", "main.npdm", "rtld", "sdk", "subsdk0", "subsdk1"};
+        mkdir(ROOT "/exefs", 0755);
+        for (size_t i = 0; ok && i < sizeof code / sizeof *code; i++) {
+            char src[1100], dst[1100];
+            snprintf(src, sizeof src, "%s/%s", f.exefs, code[i]);
+            snprintf(dst, sizeof dst, ROOT "/exefs/%s", code[i]);
+            ok = is_file(src) && romfs_copy_file(src, dst, copy_progress);
+        }
+    } else
+        ok = romfs_copy_tree(f.exefs, ROOT "/exefs", copy_progress);
     if (ok && f.romfs_bin[0]) {
         g_phase0 = 0.01f, g_phase1 = 0.15f;
         ok = romfs_copy_file(f.romfs_bin, ROOT "/romfs.bin", copy_progress);

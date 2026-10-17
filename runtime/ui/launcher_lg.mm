@@ -107,8 +107,8 @@ static void keys_section(void) {
     if (!bind_is_default(BIND_DEV_KEY) && ImGui::Button(T("Restore default keys", "Restaurar teclas padrão"))) bind_reset(BIND_DEV_KEY);
     ImGui::TextUnformatted(T("Mouse while aiming a Poké Ball: move = aim, left = throw.",
                              "Mouse na mira da Poké Ball: mover = mirar, esquerdo = arremessar."));
-    ImGui::TextUnformatted(T("Otherwise: left = touch screen (Play with Eevee). Right = B.",
-                             "Fora dela: esquerdo = tocar na tela (Brincar com Eevee). Direito = B."));
+    ImGui::TextUnformatted(T("Otherwise: left = touch screen (Play with your partner). Right = B.",
+                             "Fora dela: esquerdo = tocar na tela (Brincar com o parceiro). Direito = B."));
     ImGui::PushItemWidth(420);
     ImGui::SliderFloat(T("Mouse sensitivity", "Sensibilidade do mouse"), &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
     ImGui::SliderFloat(T("Controller stick dead zone", "Zona morta do analógico"), &g_settings.stick_deadzone, 0.0f, 0.40f, "%.2f");
@@ -159,31 +159,33 @@ static void game_files_section(SDL_Window *win) {
     }
     bool ready = setup_ready();
     if (ready) {
-        ImGui::TextColored(k_green, "%s", T("Pokémon: Let's Go, Eevee! v1.0.0 - ready to play", "Pokémon: Let's Go, Eevee! v1.0.0 - pronto para jogar"));
+        const char *name = game_name("extracted/exefs");
+        ImGui::TextColored(k_green, g_pt ? "Pokémon: Let's Go, %s! - pronto para jogar" : "Pokémon: Let's Go, %s! - ready to play",
+                           name ? name : "Eevee");
         ImGui::SameLine();
         if (ImGui::SmallButton(T("Change...", "Trocar..."))) SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
         return;
     }
     if (st >= SETUP_FAIL_NOT_FOUND) {
         static const char *const en[] = {"No game files found in that folder.", "Those are packed game files (.xci / .nsp).",
-                                         "That's not Pokémon: Let's Go, Eevee! version 1.0.0.", "The files couldn't be copied.",
+                                         "That's not Pokémon: Let's Go, Eevee! or Pikachu!.", "The files couldn't be copied.",
                                          "The game code didn't build.", "The game code builder is missing from this copy."};
         static const char *const pt[] = {"Nenhum arquivo do jogo nessa pasta.", "Esses são arquivos do jogo empacotados (.xci / .nsp).",
-                                         "Isso não é o Pokémon: Let's Go, Eevee! versão 1.0.0.", "Os arquivos não puderam ser copiados.",
+                                         "Isso não é o Pokémon: Let's Go, Eevee! nem o Pikachu!.", "Os arquivos não puderam ser copiados.",
                                          "O código do jogo não compilou.", "O compilador do código do jogo não está nesta cópia."};
         static const char *const en_h[] = {"Choose the folder that holds exefs and romfs.", "Extract them first (exefs and romfs).",
-                                           "Updates aren't supported: use the base game, without updates.", "Check there are about 6 GB free and try again.",
+                                           "Pick the folder of your own extracted Let's Go, Eevee! or Pikachu!.", "Check there are about 6 GB free and try again.",
                                            "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again."};
         static const char *const pt_h[] = {"Escolha a pasta que tem exefs e romfs.", "Extraia antes (exefs e romfs).",
-                                           "Atualizações não são suportadas: use o jogo base, sem atualização.", "Confira se há uns 6 GB livres e tente de novo.",
+                                           "Escolha a pasta do seu Let's Go, Eevee! ou Pikachu! extraído.", "Confira se há uns 6 GB livres e tente de novo.",
                                            "Confira se há uns 2 GB livres e tente de novo; detalhes no lasrecomp.log.", "Baixe a release de novo."};
         int k = st - SETUP_FAIL_NOT_FOUND;
         ImGui::TextColored(k_red, "%s", T(en[k], pt[k]));
         ImGui::TextDisabled("%s", T(en_h[k], pt_h[k]));
     } else {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 900);
-        ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! v1.0.0 (exefs and romfs).",
-                                 "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! v1.0.0 extraído (exefs e romfs)."));
+        ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs).",
+                                 "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! ou Pikachu! extraído (exefs e romfs)."));
         ImGui::PopTextWrapPos();
     }
     if (ImGui::Button(T("Select game folder...", "Selecionar pasta do jogo..."), ImVec2(-FLT_MIN, 0)))
@@ -269,14 +271,20 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::Combo(T("Resolution", "Resolução"), &res, g_pt ? res_pt : res_en, 5);
         if (ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full)) SDL_SetWindowFullscreen(win, full);
         ImGui::Checkbox(T("Anti-aliasing (SMAA)", "Suavizar serrilhado (SMAA)"), &smaa);
+        // (both hook game functions by address: builds without address tables keep them off, runtime/fnhook.c)
+        bool known = !setup_ready() || game_build("extracted/exefs") != GAME_BUILD_OTHER;
+        const char *only = T("Only with version 1.0.0 (the base game) of Eevee or Pikachu for now.",
+                             "Por enquanto só na versão 1.0.0 (o jogo base) do Eevee ou do Pikachu.");
+        ImGui::BeginDisabled(!known);
         ImGui::Checkbox(T("60 fps (experimental)", "60 fps (experimental)"), &fps60);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", T("The world at 60 fps; menus and the Pokédex smoothed; battles and captures stay at 30.",
-                                      "Mundo a 60 fps; menus e Pokédex suavizados; batalhas e capturas continuam a 30."));
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", !known ? only : T("The world at 60 fps; menus and the Pokédex smoothed; battles and captures stay at 30.",
+                                                     "Mundo a 60 fps; menus e Pokédex suavizados; batalhas e capturas continuam a 30."));
         ImGui::Checkbox(T("Wild battles (experimental)", "Batalhas selvagens (experimental)"), &wildb);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
-                                      "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", !known ? only : T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
+                                                     "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
+        ImGui::EndDisabled();
         const char *none = T("None (English)", "Nenhuma (inglês)");
         if (ImGui::BeginCombo(T("Translation", "Tradução"), mod ? mods[mod - 1] : none)) {
             if (ImGui::Selectable(none, mod == 0)) mod = 0;

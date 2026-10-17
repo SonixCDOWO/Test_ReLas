@@ -135,6 +135,8 @@ static Service *new_am_storage(const void *data, uint64_t size) {
 
 extern const uint8_t g_user_id[16];
 
+const char *g_game_version = "1.0.0";  // the set-up game's version (runtime/gamesetup.c game_version)
+
 static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
@@ -153,7 +155,13 @@ static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
     case 20: OUT(uint64_t, 0) = 0; resp_size(resp, 8); break;  // EnsureSaveData
     case 21: memset(resp->data, 0, 8); memcpy(resp->data, game_language(), strlen(game_language())); resp_size(resp, 8);  // GetDesiredLanguage
         LOG("[am] GetDesiredLanguage: %s\n", game_language()); break;
-    case 23: memcpy(resp->data, "1.0.0", 6); resp_size(resp, 0x10); break;
+    case 23: {  // GetDisplayVersion: the version of the set-up build (runtime/main.c)
+        extern const char *g_game_version;
+        memset(resp->data, 0, 0x10);
+        memcpy(resp->data, g_game_version, strlen(g_game_version));
+        resp_size(resp, 0x10);
+        break;
+    }
     case 40: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;  // NotifyRunning
     case 130: case 140: resp->copy_handles[resp->ncopy++] = new_event(); break;
     default: UNHANDLED("IApplicationFunctions");

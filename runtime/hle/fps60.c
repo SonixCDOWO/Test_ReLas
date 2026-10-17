@@ -193,7 +193,9 @@ void fps60_configure(void) {
     extern void settings_load(void);
     settings_load();  // (read once; without the launcher it would come later, in boot)
     if (!getenv("LARECOMP_FPS60")) g_on = g_settings.fps == 60, g_all60 = false;
-    if (g_on && !hooked) {
+    extern uint64_t rt_addr(uint64_t eevee);  // (runtime/fnhook.c: 0 in a build it doesn't know)
+    if (!rt_addr(FIELD_UPDATE)) g_on = g_all60 = false;
+    if ((g_on || g_stats) && !hooked) {
         hooked = true;
         rt_register_fnhook(FIELD_UPDATE, field_hook);
         rt_register_fnhook(ENCOUNTER_SCENE, scene_hook);
@@ -208,13 +210,7 @@ __attribute__((constructor)) static void fps60_init(void) {
     const char *e = getenv("LARECOMP_FPS60");
     g_on = e && atoi(e);
     g_all60 = e && atoi(e) == 2;
-    g_stats = getenv("LARECOMP_FPS60_STATS") != NULL;
-    if (g_on || g_stats) {
-        rt_register_fnhook(FIELD_UPDATE, field_hook);
-        rt_register_fnhook(ENCOUNTER_SCENE, scene_hook);
-        rt_register_fnhook(BATTLE_START, scene_hook);
-        rt_register_fnhook(G_ACCESSOR, accessor_hook);
-    }
+    g_stats = getenv("LARECOMP_FPS60_STATS") != NULL;  // (the hooks: fps60_configure)
     if (getenv("LARECOMP_ELAPSED_LOG")) {
         const char *fr = getenv("LARECOMP_TIME_PROBE_FRAMES");
         if (fr) { g_tp_from = atol(fr); g_tp_to = strchr(fr, '-') ? atol(strchr(fr, '-') + 1) : g_tp_from; }

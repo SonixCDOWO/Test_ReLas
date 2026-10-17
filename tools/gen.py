@@ -466,7 +466,7 @@ class Module:
         return out
 
 
-from patches import PATCHES
+from patches import BUILD_ADDRS, EEVEE_100_BUILD, PATCHES
 
 import json as _json
 import os as _os
@@ -507,6 +507,15 @@ def main():
 
     t0 = time.time()
     m = Module(args.name, args.nso, args.base, args.simd, args.trace_stores)
+    bid = m.nso.build_id[:16]
+    if args.name == 'main' and bid != EEVEE_100_BUILD:
+        # The instruction patches are written for Let's Go Eevee 1.0.0's main: moved to the same instructions of a
+        # build with an address table (tools/patches.py), left out of any other (another update has other code there).
+        moved = {BUILD_ADDRS[bid][a]: fn for a, fn in PATCHES.items()} if bid in BUILD_ADDRS else {}
+        print(f'{args.name}: build {bid}, ' + (f'{len(moved)} instruction patches moved' if moved else 'no instruction patches'))
+        PATCHES.clear()
+        PATCHES.update(moved)
+        RANDO_CODE.clear()
     starts = m.boundaries()
     hle = {}
     if args.hle and os.path.exists(args.hle):

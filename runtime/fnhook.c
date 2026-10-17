@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "gamelib.h"
+#include "gamesetup.h"
 #include "hle.h"
 
 volatile int g_fnhook;
@@ -22,12 +23,69 @@ typedef int (*FnHook)(Cpu *c, uint64_t addr);
 static struct { uint64_t addr; FnHook fn; } hooks[NHOOK];
 static __thread uint64_t bypass;  // rt_call_original: the next entry of this function is the original running
 
-void rt_register_fnhook(uint64_t addr, FnHook fn) {
+// The runtime's hooks are written with addresses of Let's Go Eevee 1.0.0's main (the build the research was done on,
+// docs/). The same functions in the other known builds, found by tools/addrmap.py (the code matches instruction by
+// instruction, struct offsets included): each registration is kept as written and the hook table is rebuilt for the
+// running build (rt_fnhook_set_build, before each boot; an unknown build gets none). Hooks at addresses the user gave
+// (LARECOMP_HOOK_DUMP) are taken as they are.
+static const uint64_t k_pikachu_100[][2] = {
+    {0x700011ece0, 0x700011ecb0}, {0x700011ee50, 0x700011ee20}, {0x700017f0a0, 0x700017f070},
+    {0x70002185d0, 0x70002185a0}, {0x70002186a0, 0x7000218670}, {0x7000289ac0, 0x7000289a90},
+    {0x7000289b40, 0x7000289b10}, {0x7000289f60, 0x7000289f30}, {0x7000289fd0, 0x7000289fa0},
+    {0x700028bb60, 0x700028bb30}, {0x700028ef70, 0x700028ef40}, {0x70002bad00, 0x70002bacd0},
+    {0x70002f60c0, 0x70002f6090}, {0x70002f65d0, 0x70002f65a0}, {0x70002f78d0, 0x70002f78a0},
+    {0x70002f8bb0, 0x70002f8b80}, {0x70003058f0, 0x70003058c0}, {0x7000305a98, 0x7000305a68},
+    {0x7000305ad0, 0x7000305aa0}, {0x70006237b0, 0x7000623750}, {0x7000641190, 0x7000641130},
+    {0x7000663660, 0x7000663600}, {0x7000664cd0, 0x7000664c70},
+    {0x70000395f0, 0x70000395f0}, {0x7000039600, 0x7000039600},  // (same place)
+};
+static int g_build = -1;  // GAME_BUILD_* (runtime/gamesetup.h); -1 before the first boot
+
+uint64_t rt_addr(uint64_t eevee) {
+    if (g_build == GAME_BUILD_EEVEE_100 || g_build < 0) return eevee;
+    if (g_build == GAME_BUILD_PIKACHU_100)
+        for (size_t i = 0; i < sizeof k_pikachu_100 / sizeof *k_pikachu_100; i++)
+            if (k_pikachu_100[i][0] == eevee) return k_pikachu_100[i][1];
+    return 0;
+}
+
+#define NREG 256
+static struct { uint64_t addr; FnHook fn; bool user; } regs[NREG];
+static int nregs;
+
+static void add_hook(uint64_t addr, FnHook fn) {
+    if (!addr) return;
     uint32_t s = (uint32_t)((addr >> 2) * 0x9E3779B1u) & (NHOOK - 1);
     while (hooks[s].addr && hooks[s].addr != addr) s = (s + 1) & (NHOOK - 1);
     hooks[s].addr = addr;
     hooks[s].fn = fn;
     g_fnhook = 1;
+}
+
+static void reg(uint64_t addr, FnHook fn, bool user) {
+    for (int i = 0; i < nregs; i++)
+        if (regs[i].addr == addr && regs[i].user == user) { regs[i].fn = fn; goto add; }
+    if (nregs == NREG) { LOG("[fnhook] too many hooks\n"); return; }
+    regs[nregs].addr = addr, regs[nregs].fn = fn, regs[nregs].user = user, nregs++;
+add:
+    if (user) add_hook(addr, fn);
+    else if (g_build >= 0) {
+        uint64_t a = rt_addr(addr);
+        if (!a) LOG("[fnhook] %llx: no such function in this build\n", (unsigned long long)addr);
+        add_hook(a, fn);
+    }
+}
+
+void rt_register_fnhook(uint64_t addr, FnHook fn) { reg(addr, fn, false); }
+
+void rt_fnhook_set_build(int build) {
+    if (build == g_build) return;
+    g_build = build;
+    memset(hooks, 0, sizeof hooks);
+    g_fnhook = 0;
+    int n = nregs;
+    nregs = 0;
+    for (int i = 0; i < n; i++) reg(regs[i].addr, regs[i].fn, regs[i].user);
 }
 
 int rt_fnhook(Cpu *c, uint64_t addr) {
@@ -41,7 +99,11 @@ int rt_fnhook(Cpu *c, uint64_t addr) {
 }
 
 // The game's function at addr (gamelib tables), run as if called: x0.. as set by the caller of the hook.
+// addr: the hooked function (as the hook received it) or an Eevee 1.0.0 address from the runtime's code (translated).
 void rt_call_original(Cpu *c, uint64_t addr) {
+    if (g_build == GAME_BUILD_PIKACHU_100)
+        for (size_t i = 0; i < sizeof k_pikachu_100 / sizeof *k_pikachu_100; i++)
+            if (k_pikachu_100[i][0] == addr) { addr = k_pikachu_100[i][1]; break; }
     const GameLibTables *t = gamelib_tables();
     for (uint32_t m = 0; t && m < t->nmods; m++) {
         const GameLibModule *md = &t->mods[m];
@@ -132,5 +194,5 @@ __attribute__((constructor)) static void hook_dump_init(void) {
         }
         ndumps++;
     }
-    for (int i = 0; i < ndumps; i++) rt_register_fnhook(dumps[i].addr, dump_hook);
+    for (int i = 0; i < ndumps; i++) reg(dumps[i].addr, dump_hook, true);
 }

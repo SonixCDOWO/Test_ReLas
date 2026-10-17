@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "gamelib.h"
+#include "gamesetup.h"
 #include "paths.h"
 #include "settings.h"
 #include "hle.h"
@@ -180,6 +181,16 @@ int main(int argc, char **argv) {
         if (title) {  // start screen: resolution, fullscreen, anti-aliasing, translation, keys (runtime/ui/launcher_lg.mm)
             extern void launcher_lg_run(const char *root);
             launcher_lg_run(root);
+        }
+        {  // (runtime/fnhook.c: the runtime's hooks, in the address tables of the known builds)
+            extern void rt_fnhook_set_build(int build);
+            char exefs[1100];
+            snprintf(exefs, sizeof exefs, "%s/exefs", root);
+            int build = game_build(exefs);
+            rt_fnhook_set_build(build);
+            extern const char *g_game_version;  // (runtime/services/am.c)
+            g_game_version = game_version(exefs);
+            if (build == GAME_BUILD_OTHER) LOG("[boot] %s: a build without address tables, 60 fps and wild battles stay off\n", exefs);
         }
         { extern void fps60_configure(void); fps60_configure(); }  // (runtime/hle/fps60.c: the launcher's 60 fps option)
         { extern void wildbattle_configure(void); wildbattle_configure(); }  // (runtime/hle/wildbattle.c: the wild battles option)

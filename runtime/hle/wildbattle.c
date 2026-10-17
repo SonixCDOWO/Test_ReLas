@@ -26,6 +26,7 @@
 
 void rt_register_fnhook(uint64_t addr, int (*fn)(Cpu *c, uint64_t addr));  // runtime/fnhook.c
 void rt_call_original(Cpu *c, uint64_t addr);
+uint64_t rt_addr(uint64_t eevee);  // runtime/fnhook.c: an Eevee 1.0.0 address in the running build (0: unknown build)
 uint64_t renderer_present_count(void);
 
 #define ENCOUNTER_TRIGGER 0x7000305ad0ull  // a touched wild Pokémon (x0 = it, x1 -> the world's object): starts the capture
@@ -115,7 +116,7 @@ static int logpoke_hook(Cpu *c, uint64_t addr) {
 }
 
 static int build_hook(Cpu *c, uint64_t addr) {
-    if (c->x[30] != WILD_BUILDER_RETURN) return 0;  // (another builder: the game's own)
+    if (c->x[30] != rt_addr(WILD_BUILDER_RETURN)) return 0;  // (another builder: the game's own)
     uint64_t cfg = c->x[0], lr = c->x[30];
     rt_call_original(c, addr);
     c->x[30] = lr;
@@ -232,9 +233,9 @@ static bool g_fadein_done = true;
 
 static int fade_log_hook(Cpu *c, uint64_t addr) {
     LOG("[wild] f%llu fade %s: x1 %llx x2(type) %llx x3 %llx x4 %llx x5 %llx\n", (unsigned long long)renderer_present_count(),
-        addr == FADE_IN_FN ? "in " : "out", (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3],
+        addr == rt_addr(FADE_IN_FN) ? "in " : "out", (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3],
         (unsigned long long)c->x[4], (unsigned long long)c->x[5]);
-    if (addr == FADE_OUT_FN) { g_fade_type = (int)c->x[2]; g_fade_seen = 1; }
+    if (addr == rt_addr(FADE_OUT_FN)) { g_fade_type = (int)c->x[2]; g_fade_seen = 1; }
     return 0;
 }
 
@@ -424,6 +425,7 @@ void wildbattle_configure(void) {
     settings_load();  // (read once; without the launcher it would come later, in boot)
     const char *e = getenv("LARECOMP_WILDBATTLE");
     bool on = e && *e ? atoi(e) != 0 : g_settings.wild_battle;
+    if (!rt_addr(ENCOUNTER_TRIGGER)) on = false;  // (a build runtime/fnhook.c doesn't know: these functions are elsewhere)
     if (!on || hooked) return;
     hooked = true;
     g_max = 1 << 30;  // every touch (the test runs set LARECOMP_WILDBATTLE_MAX)

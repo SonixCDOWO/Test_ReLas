@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "gamesetup.h"
 #include "hle.h"
 #include "platform.h"
 #include "romfs_build.h"
@@ -22,14 +23,19 @@ static bool is_dir(const char *p) {
 }
 
 // The romfs/ folder inside dir, up to `depth` levels down (a download unpacked with its own folders around it). Packs
-// made for both games (atmosphere/titles/<Pikachu>/ and <Eevee>/) are searched under Let's Go Eevee's title id first.
+// made for both games (atmosphere/titles/<Pikachu>/ and <Eevee>/) are searched under the set-up game's title id first.
 #define EEVEE_TITLE "0100187003A36000"
+#define PIKACHU_TITLE "010003F003A34000"
 static bool find_romfs(const char *dir, int depth, char *out, size_t cap) {
     char p[1024];
     snprintf(p, sizeof p, "%s/romfs", dir);  // (RomFs / romfs: Windows names ignore case)
     if (is_dir(p)) { snprintf(out, cap, "%s", p); return true; }
     if (depth <= 0) return false;
-    snprintf(p, sizeof p, "%s/" EEVEE_TITLE, dir);
+    const char *name = game_name("extracted/exefs");
+    bool pikachu = name && !strcmp(name, "Pikachu");
+    snprintf(p, sizeof p, "%s/%s", dir, pikachu ? PIKACHU_TITLE : EEVEE_TITLE);
+    if (is_dir(p) && find_romfs(p, depth - 1, out, cap)) return true;
+    snprintf(p, sizeof p, "%s/%s", dir, pikachu ? EEVEE_TITLE : PIKACHU_TITLE);
     if (is_dir(p) && find_romfs(p, depth - 1, out, cap)) return true;
     DIR *d = opendir(dir);
     if (!d) return false;
