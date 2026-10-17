@@ -54,6 +54,17 @@ static void recompute_keyboard(void) {
     key_ry = (held_key(g_bind_key[BIND_RS_UP]) - held_key(g_bind_key[BIND_RS_DOWN])) * 32767;
 }
 
+// A controller's stick never rests at exactly 0, and the game reads any value as a push: the Poké Ball aim crept with
+// the stick let go. Radial dead zone (g_settings.stick_deadzone, the launcher's "stick dead zone"): inside it the stick
+// reads 0; outside, the travel left is stretched back to the full range, so there is no jump at its edge.
+static void stick_deadzone(int32_t *x, int32_t *y) {
+    double dz = g_settings.stick_deadzone, m = sqrt((double)*x * *x + (double)*y * *y) / 32767.0;
+    if (dz <= 0) return;
+    if (m <= dz) { *x = *y = 0; return; }
+    double k = (m > 1 ? 1 : (m - dz) / (1 - dz)) / m;
+    *x = (int32_t)lround(*x * k), *y = (int32_t)lround(*y * k);
+}
+
 // Controller buttons (and the triggers as buttons) -> Switch buttons through g_bind_pad; the sticks stay the sticks.
 static void recompute_pad(void) {
     uint32_t host = test_pad;
@@ -74,11 +85,17 @@ static void recompute_pad(void) {
     for (int i = 0; i < BIND_PAD_COUNT; i++)
         if (g_bind_pad[i] >= 0 && g_bind_pad[i] < PADB_HOST_COUNT && (host >> g_bind_pad[i] & 1)) b |= 1ull << i;
     pad_buttons = b;
-    if (!pad || host_test || user_off) { pad_lx = test_lx, pad_ly = test_ly, pad_rx = pad_ry = 0; return; }
-    pad_lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
-    pad_ly = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
-    pad_rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX);
-    pad_ry = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
+    if (!pad || host_test || user_off) {  // (a test's simulated stick drift goes through the dead zone too)
+        int32_t tx = test_lx, ty = test_ly;
+        stick_deadzone(&tx, &ty);
+        pad_lx = tx, pad_ly = ty, pad_rx = pad_ry = 0;
+        return;
+    }
+    int32_t lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), ly = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
+    int32_t rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX), ry = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
+    stick_deadzone(&lx, &ly);
+    stick_deadzone(&rx, &ry);
+    pad_lx = lx, pad_ly = ly, pad_rx = rx, pad_ry = ry;
 }
 
 // The mouse: held by the game window (relative mode) or free

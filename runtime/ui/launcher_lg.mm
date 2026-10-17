@@ -111,6 +111,7 @@ static void keys_section(void) {
                              "Fora dela: esquerdo = tocar na tela (Brincar com Eevee). Direito = B."));
     ImGui::PushItemWidth(420);
     ImGui::SliderFloat(T("Mouse sensitivity", "Sensibilidade do mouse"), &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
+    ImGui::SliderFloat(T("Controller stick dead zone", "Zona morta do analógico"), &g_settings.stick_deadzone, 0.0f, 0.40f, "%.2f");
     ImGui::PopItemWidth();
 }
 

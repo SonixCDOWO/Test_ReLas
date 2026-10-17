@@ -16,6 +16,7 @@
 #include "../renderer.h"
 #include "../../settings.h"
 
+static uint64_t g_draws_total;  // (never reset: LARECOMP_COUNTER_LOG)
 static uint64_t stat_draws, stat_skipped, stat_passes, stat_dispatches, stat_wait_ns, stat_flushes, stat_feedback_copies;
 // Skipped draws by reason (logged with the stats): 0 no program bound, 1 program still compiling, 2 program failed,
 // 3 no program object, 4 primitive mode, 5 pipeline still building, 6 pipeline failed.
@@ -2360,6 +2361,7 @@ static void draw_(CmdRec *r, bool indexed) {
     if (!use_index) vkCmdDraw(cb, count, inst, first, base_inst);
     else vkCmdDrawIndexed(cb, icount, inst, 0, base_vertex, base_inst);
     stat_draws++;
+    g_draws_total++;
     cum_draws++;
     if (g_gpuprof_frame && gp_n) {
         if (!gp_draws[gp_n - 1]) {  // first draw of the row: its fragment shader hash
@@ -3173,12 +3175,20 @@ static void exec_list(uint64_t handle, int depth) {
             uint32_t type = (uint32_t)r->x[0];
             static uint32_t seen;
             if (type < 32 && !(seen & (1u << type))) { seen |= 1u << type; LOG("[nvn] ReportCounter type %u\n", type); }
-            static int frozen = -1;
-            if (frozen < 0) { const char *e = getenv("LARECOMP_VK_COUNTER"); frozen = e && !strcmp(e, "frozen"); }
-            static uint64_t frame_seen = ~0ull, frame_ts;
+            static int frozen = -1;  // 1: frozen; 2: ideal (LARECOMP_VK_COUNTER=ideal: a 33.3 ms frame, 1 ms per counter in it)
+            if (frozen < 0) { const char *e = getenv("LARECOMP_VK_COUNTER"); frozen = !e ? 0 : !strcmp(e, "frozen") ? 1 : !strcmp(e, "ideal") ? 2 : 0; }
+            static uint64_t frame_seen = ~0ull, frame_ts, in_frame;
             extern uint64_t vk_frame_counter(void);
-            if (frozen && vk_frame_counter() != frame_seen) { frame_seen = vk_frame_counter(); frame_ts = SDL_GetTicksNS(); }
-            if (out) { out[0] = 0; out[1] = frozen ? frame_ts : SDL_GetTicksNS(); }
+            if (vk_frame_counter() != frame_seen) { frame_seen = vk_frame_counter(); frame_ts = SDL_GetTicksNS(); in_frame = 0; }
+            uint64_t v = frozen == 1 ? frame_ts : frozen == 2 ? frame_seen * 33333333ull + in_frame * 1000000ull : SDL_GetTicksNS();
+            in_frame++;
+            if (out) { out[0] = 0; out[1] = v; }
+            static int clog = -1;  // LARECOMP_COUNTER_LOG=1: each counter, with the draws recorded since the previous one
+            if (clog < 0) clog = getenv("LARECOMP_COUNTER_LOG") != NULL;
+            static uint64_t last_draws;
+            if (clog) LOG("[counter] frame %llu #%llu value %llu draws %llu\n", (unsigned long long)frame_seen, (unsigned long long)in_frame,
+                          (unsigned long long)v, (unsigned long long)(g_draws_total - last_draws));
+            last_draws = g_draws_total;
             break;
         }
         case CMD_COPY_TEXTURE_TO_TEXTURE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], r->x[6]); break; }
@@ -3456,7 +3466,12 @@ static TexBackend *ip_hold_copy(TexBackend *src) {
 // the in-between image into the game's textures (b then holds it) and returns frame N's own image in *hold; false:
 // nothing to show before N. Either way, recording moves on to the next frame.
 bool vk_interp_render(TexBackend *b, TexBackend **hold) {
-    if (!ip_enabled()) return false;
+    if (!ip_enabled()) {
+        // Off (the world, a battle): what was recorded the last time it was on is stale - a menu opened later blended
+        // with that old scene (a flash when the menu opened while walking)
+        ipf[0].valid = ipf[1].valid = false;
+        return false;
+    }
     IpFrame *cur = &ipf[ipc], *prev = &ipf[ipc ^ 1];
     bool ok = prev->valid && cur->valid && cur->nlists > 0 && !cur->overflow && !prev->overflow && b && b->image &&
               b->aspect == VK_IMAGE_ASPECT_COLOR_BIT && b->samples <= 1 && cur->destroyed == g_nvn_destroyed;

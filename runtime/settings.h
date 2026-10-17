@@ -17,6 +17,7 @@ typedef struct {
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
     float mouse_sens;    // mouse aim (the virtual gyro, runtime/hle/input.c): degrees per pixel
+    float stick_deadzone;  // a controller's sticks: the share of their travel read as rest (runtime/hle/input.c)
     bool reverb;         // room reverb effect
     bool movie_audio;
     bool show_fps;
