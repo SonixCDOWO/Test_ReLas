@@ -4,6 +4,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -577,6 +578,26 @@ void backend_present(NvnTexture *t) {
     frames++;
     total_frames++;
     g_frame_counter++;
+    {   // Opt-in game-present intervals (not the extra menu image shown by the 60 fps mode).
+        static FILE *csv;
+        static uint64_t previous;
+        static bool initialized;
+        if (!initialized) {
+            initialized = true;
+            const char *path = getenv("LARECOMP_FRAMETIME_CSV");
+            if (path && *path) {
+                csv = fopen(path, "w");
+                if (csv) fputs("present,dt_ms\n", csv);
+                else LOG("[vk] cannot open frametime CSV: %s\n", path);
+            }
+        }
+        if (csv) {
+            uint64_t now = SDL_GetTicksNS();
+            if (previous) fprintf(csv, "%llu,%.6f\n", (unsigned long long)total_frames, (now - previous) / 1e6);
+            previous = now;
+            if (total_frames % 60 == 0) fflush(csv);
+        }
+    }
     {   // LARECOMP_RENDERDOC_AT=<frame>: under RenderDoc (renderdoccmd capture), capture the frame after that one
         extern void renderdoc_frame(uint64_t frame);
         renderdoc_frame(total_frames);

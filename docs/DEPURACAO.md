@@ -50,6 +50,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_SHOT_AT=<frame>,...` | salva o quadro do jogo em `build/frames/frame_N.png` |
 | Estatística a cada 2 s (`[vk] t=...`) | draws, passes, dispatches, uploads, `compile N (translate, spirv, pipelines, draws waited)` (programas e pipelines prontos, o tempo de CPU de cada etapa e quanto os draws esperaram por eles). Para medir uma primeira visita, renomeie `cache/` antes do teste e devolva depois e `[skip: ...]` com os draws pulados por motivo |
 | `tools/perf_summary.py [log]` | resumo de uma sessão: faixa de fps, quadros acima de 50 ms, draws pulados, compilações, underruns de áudio (padrão: `logs/jogo.log`) |
+| `LARECOMP_FRAMETIME_CSV=<arquivo>` | grava `present,dt_ms` para cada present do jogo (exceto o primeiro), com tempo monotônico; quadro intermediário extra do menu a 60 não conta. Usar um caminho em `build/` |
+| `tools/frametime_summary.py <csv> [--from-present N]` | média, FPS, P95/P99 (nearest rank), máximo e número de presents acima de 50 ms; filtrar o início para separar boot/loading do mundo |
 | `LARECOMP_VK_VALIDATION=1` + `VK_ADD_LAYER_PATH=C:\msys64\ucrt64\bin` | camada de validação do Vulkan (achou o overflow das texturas do vídeo) |
 | `LARECOMP_VK_DEVLOST_TRACE=1` (+ `LARECOMP_SYNC_SUBMIT=1`) | últimas operações da GPU antes de um device lost |
 | `LARECOMP_SAVE_MSL=1` | salva cada shader traduzido em `build/glsl/<addr>_{vs,fs}.glsl` |
