@@ -27,9 +27,8 @@ static void btm_user_core(Service *s, IpcReq *req, IpcResp *resp) {
         resp_size(resp, 4);
         resp->copy_handles[resp->ncopy++] = new_event_handle();
         break;
-    default:
+    default:  // (no output, like a console with nothing paired: a made-up 0x10-byte reply made the GO settings abort, #1)
         LOG("[btm] IBtmUserCore cmd %u (ok, nothing found)\n", req->cmd);
-        resp_size(resp, 0x10);
     }
 }
 
