@@ -1,4 +1,5 @@
 // A small Horizon kernel: handles, threads, synchronization, memory, and the SVC dispatcher.
+#include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -325,6 +326,69 @@ static uint32_t block_current(int64_t timeout_ns) {
     return t->wait_result;
 }
 
+// LARECOMP_PROF_LOCKS=1: the contended mutexes (every svcArbitrateLock that has to wait), every 2 s: per mutex address
+// the number of waits, the time spent in them and the guest call chain of the first one (resolve with tools/addr2sym.py).
+typedef struct { uint64_t addr, n, ns, chain[3]; } LockStat;
+static LockStat lock_stats[64];
+
+static void lock_prof_note(uint64_t addr, uint64_t ns) {  // (caller holds g_klock)
+    static uint64_t last;
+    LockStat *s = NULL, *free_slot = NULL;
+    for (int i = 0; i < 64; i++) {
+        if (lock_stats[i].addr == addr) { s = &lock_stats[i]; break; }
+        if (!lock_stats[i].addr && !free_slot) free_slot = &lock_stats[i];
+    }
+    if (!s && free_slot) {
+        s = free_slot;
+        s->addr = addr;
+        uint64_t fp = t_cur->cpu.x[29];
+        s->chain[0] = t_cur->cpu.x[30];
+        for (int k = 1; k < 3; k++) {  // the AArch64 frame record chain {fp, lr}
+            if (fp < GUEST_LO || fp >= GUEST_HI || (fp & 7)) break;
+            s->chain[k] = ((uint64_t *)(uintptr_t)fp)[1];
+            fp = ((uint64_t *)(uintptr_t)fp)[0];
+        }
+    }
+    if (s) { s->n++; s->ns += ns; }
+    uint64_t now = plat_now_ns();
+    if (!last) last = now;
+    if (now - last < 2000000000ull) return;
+    last = now;
+    for (int shown = 0; shown < 6; shown++) {  // the six that waited longest
+        LockStat *best = NULL;
+        for (int i = 0; i < 64; i++)
+            if (lock_stats[i].addr && (!best || lock_stats[i].ns > best->ns)) best = &lock_stats[i];
+        if (!best || !best->n) break;
+        LOG("[locks] %llx: %llu waits, %llu ms (%.1f us each), first from %llx <- %llx <- %llx\n", (unsigned long long)best->addr,
+            (unsigned long long)best->n, (unsigned long long)(best->ns / 1000000), best->ns / 1000.0 / best->n,
+            (unsigned long long)best->chain[0], (unsigned long long)best->chain[1], (unsigned long long)best->chain[2]);
+        best->addr = 0;  // (counted: out of the next pick, and the slot is free again below)
+        best->n = best->ns = 0;
+    }
+    memset(lock_stats, 0, sizeof lock_stats);
+}
+
+// A contended mutex is handed to the next waiter by the owner's unlock (mutex_release). Sleeping on a condition
+// variable for that costs a wake-up (~12 us on Windows, measured with LARECOMP_PROF_LOCKS) and the world's frame has
+// ~1000 of them per thread (a hot nn::os::Mutex of the game, three threads), so a waiter first spins on its own wait
+// state for a few microseconds. LARECOMP_LOCK_SPIN_US=<n> (default 40; 0: always sleep, as before); off on a machine
+// with fewer than 4 logical processors, where the spinning thread would take the owner's core.
+#if defined(__x86_64__)
+#define CPU_RELAX() __builtin_ia32_pause()
+#else
+#define CPU_RELAX() __asm__ volatile("yield")
+#endif
+static uint64_t lock_spin_ns(void) {
+    static int64_t ns = -1;
+    if (ns < 0) {
+        const char *e = getenv("LARECOMP_LOCK_SPIN_US");
+        long us = e ? atol(e) : 40;
+        if (!e && SDL_GetNumLogicalCPUCores() < 4) us = 0;
+        ns = us > 0 ? us * 1000 : 0;
+    }
+    return (uint64_t)ns;
+}
+
 static uint32_t svc_arbitrate_lock(uint32_t owner, uint64_t addr, uint32_t tag) {
     pthread_mutex_lock(&g_klock);
     uint32_t v = __atomic_load_n(u32p(addr), __ATOMIC_SEQ_CST);
@@ -336,7 +400,25 @@ static uint32_t svc_arbitrate_lock(uint32_t owner, uint64_t addr, uint32_t tag) 
     t->wait_kind = WAIT_MUTEX;
     t->wait_addr = addr;
     t->wait_tag = tag;
-    uint32_t r = block_current(-1);
+    static int prof_locks = -1;
+    if (prof_locks < 0) prof_locks = getenv("LARECOMP_PROF_LOCKS") != NULL;
+    uint64_t t0 = prof_locks ? plat_now_ns() : 0;
+    uint32_t r;
+    uint64_t spin = lock_spin_ns();
+    bool handed = false;
+    if (spin) {  // wait on the thread's own flag first: the owner's unlock hands the mutex over without a sleep + wake-up
+        waitlist_add(t);
+        pthread_mutex_unlock(&g_klock);
+        uint64_t end = plat_now_ns() + spin;
+        while (__atomic_load_n((int *)&t->wait_kind, __ATOMIC_ACQUIRE) != WAIT_NONE && !g_rt_unwind && plat_now_ns() < end)
+            CPU_RELAX();
+        pthread_mutex_lock(&g_klock);
+        waitlist_remove(t);
+        handed = t->wait_kind == WAIT_NONE;  // (the waker wrote the result under g_klock, which we hold again)
+        r = t->wait_result;
+    }
+    if (!handed) r = block_current(-1);
+    if (prof_locks) lock_prof_note(addr, plat_now_ns() - t0);
     pthread_mutex_unlock(&g_klock);
     return r == R_CANCELLED ? R_OK : r;
 }

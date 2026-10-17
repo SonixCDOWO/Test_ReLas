@@ -40,6 +40,9 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | Backtrace do crash | funções do jogo aparecem como `f_<endereço>`; `svcBreak` mostra o `nn::Result` |
 | `LARECOMP_THREAD_DUMP=<s>[,<repete s>]` | lista cada thread: svc em que está bloqueada, argumentos e pilha do guest |
 | `LARECOMP_TRACE_SVC=1` | loga cada chamada de sistema (muito volume) |
+| `LARECOMP_PROF_SVC=1` | a cada 2 s, por thread do guest: chamadas de sistema (`svc`), quantas e quanto tempo cada uma bloqueou (`[svcprof]`) |
+| `LARECOMP_PROF_LOCKS=1` | a cada 2 s, os mutexes do jogo mais disputados (`ArbitrateLock` que teve de esperar): endereço, esperas, tempo e a pilha do guest da primeira (`[locks]`; resolver com `tools/addr2sym.py`) |
+| `LARECOMP_LOCK_SPIN_US=<n>` | quanto uma thread espera girando por um mutex contendido antes de dormir (padrão 40; 0 = sempre dorme, como antes; desligado com menos de 4 processadores lógicos). Para comparar antes/depois no mesmo binário |
 | `tools/addr2sym.py <endereço> [-d <bytes>]` | módulo, símbolo mais próximo e disassembly de um endereço do guest |
 | `tools/addrmap.py <main de> <main para> <endereço>... [d:<dado>]` | o mesmo código (ou dado) em outro build do `main` (Eevee <-> Pikachu, atualização): compara as instruções com os campos relativos mascarados até achar uma só. Os endereços do runtime vão em `runtime/fnhook.c` e `tools/patches.py` (regra de paridade, CLAUDE.md) |
 | `nm build/lasrecomp.exe` | símbolos do runtime para endereços `lasrecomp+0x...` |

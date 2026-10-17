@@ -209,6 +209,14 @@ comportamento é o do Switch.
 
 ---
 
+## Locks do kernel (17/10/2026)
+
+| # | Sintoma | Diagnóstico | Causa | Correção | Arquivo |
+|---|---|---|---|---|---|
+| 57 | O mundo da Rota 1 (~600 draws por quadro) rodava a só ~60 fps sem limite de fps, e a 60 fps pacado ficava em 58,8-59,3 fps (P99 ~19,6 ms), com nenhuma thread acima de ~41% de CPU (total 1,09 núcleo). O custo do backend Vulkan era pequeno (~3 ms por quadro; descriptor sets 0,45 ms) | `LARECOMP_VK_PROF` (CPU do backend e GPU por quadro), CPU por thread amostrada de fora, `LARECOMP_PROF_SVC`: 3 threads do jogo gastavam ~750 ms a cada 2 s em `ArbitrateLock` (~62 mil chamadas cada, ~12 µs por chamada). `LARECOMP_PROF_LOCKS`: um único mutex do jogo respondia por ~126 mil esperas em 2 s (`nn::os::LockMutex` chamado de `main+0x2e704`; o `main` não tem símbolos, o nome que o `addr2sym` mostra ali é só o mais próximo). Desmontagem do SDK (`InternalCriticalSectionImplByHorizon::Enter` e `Leave`): depois do svc o `Enter` relê a palavra do mutex, confere se é o dono e repete o laço, e o `Leave` com waiters só chama `ArbitrateUnlock` | Cada espera por mutex contendido dormia numa condvar do kernel (sob o `g_klock` global) e a posse era entregue a uma thread adormecida: ~12 µs de latência para acordar uma thread no Windows, cerca de mil vezes por quadro por thread | Antes de dormir, a thread espera girando até 40 µs no próprio estado de espera (`LARECOMP_LOCK_SPIN_US`; 0 volta ao comportamento antigo; desligado com menos de 4 processadores lógicos). A posse continua sendo entregue por `mutex_release`, então a semântica do kernel não mudou. `LARECOMP_PROF_LOCKS=1` lista os mutexes disputados a cada 2 s. Medido (Eevee, RTX 3080, janela 1280x720, mesmo binário, A/B intercalado): custo por espera do mutex quente 12 → 1,2-1,4 µs; esperas dele ~130 mil → 41-51 mil por 2 s; mundo sem limite de fps ~60 (59,1 e 61,0) → 73,7 e 65,1 fps; 60 fps pacado (Rota 1, 2 rodadas cada) 58,8 e 59,3 → 60,0 e 60,0 fps, P99 19,6 → 17,3 ms. Pewter City a 60 fps pacado: 60,0 fps nos dois jogos e já antes. Bateria (`tools/bateria.sh`) nos dois jogos, 3 rotas: 0 crash, 0 erro de validação, 0 chamada não implementada, piscadas equivalentes com e sem o spin. Limites: uma máquina e uma GPU; sem AMD/Intel, sem máquina de 2 núcleos (o spin fica desligado ali); jogo novo testado por 6.400 quadros com áudio só até a abertura. O gargalo seguinte do mundo é a GPU (~9-10 ms por quadro a 1280x720) mais o resto da cadeia entre as threads do jogo. A documentação antiga dizia ~160 fps sem limite no mundo; nesta rota medi ~60 antes e ~65-84 depois | `runtime/kernel.c` |
+
+---
+
 ## Lições aprendidas
 - **Medir antes de chutar.** Os maiores avanços vieram de instrumentação: dump de threads, motivo dos draws
   pulados, gravação do áudio, log de quem chama cada função.
