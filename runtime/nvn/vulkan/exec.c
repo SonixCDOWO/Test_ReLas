@@ -2052,6 +2052,22 @@ static void draw_(CmdRec *r, bool indexed) {
         if (g_debug_frame && getenv("LARECOMP_LOG_FSHASH")) LOG("[fshash] fs=%llx hash %016llx\n", (unsigned long long)fs, (unsigned long long)last_hash);
         g_cur_fs_hash = last_hash;
     }
+    {   // (research, LARECOMP_COUNT_TEX=<w>x<h>: per frame, the draws and instances sampling a fragment texture of that size)
+        static int tw = -1, th;
+        if (tw < 0) { const char *e = getenv("LARECOMP_COUNT_TEX"); tw = 0; if (e) sscanf(e, "%dx%d", &tw, &th); }
+        if (tw > 0) {
+            static uint64_t frame = ~0ull;
+            static unsigned nd, ni;
+                        if (renderer_present_count() != frame) {
+                if (frame != ~0ull) LOG("[counttex] frame %llu: %u draws %u instances\n", (unsigned long long)frame, nd, ni);
+                frame = renderer_present_count(), nd = ni = 0;
+            }
+            for (int i = 0; i < pr->fi->ntex && i < 64; i++) {
+                NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+                if (t && (int)t->width == tw && (int)t->height == th) { nd++; ni += (unsigned)(indexed ? r->x[6] : r->x[4]); break; }
+            }
+        }
+    }
     if (g_debug_frame) debug_draw(pr, r, indexed);
     else if ((pr->vi->attr_mask >> 11) & 1) {  // skinned draws (a11: bone indices)
         static int n;
@@ -2244,6 +2260,19 @@ static void draw_(CmdRec *r, bool indexed) {
             vp_sx = vp_sy = u;
             vp_ox = (pw - st.rt.color[0]->width * u) * 0.5f;
             vp_oy = (ph - st.rt.color[0]->height * u) * 0.5f;
+        }
+    }
+    {   // (research, LARECOMP_COUNT_FS=<fs hash>: draws with that fragment shader per frame, logged when the count changes)
+        static uint64_t want = 1, frame = ~0ull;
+        static unsigned n, last = ~0u;
+        if (want == 1) { const char *e = getenv("LARECOMP_COUNT_FS"); want = e ? strtoull(e, NULL, 16) : 0; }
+        if (want) {
+                        if (renderer_present_count() != frame) {
+                if (frame != ~0ull && n != last) LOG("[countfs] frame %llu: %u\n", (unsigned long long)frame, n);
+                if (frame != ~0ull) last = n;
+                frame = renderer_present_count(), n = 0;
+            }
+            if (g_cur_fs_hash == want) n++;
         }
     }
     {

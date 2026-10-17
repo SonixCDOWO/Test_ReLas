@@ -103,6 +103,8 @@ static void obj_mark(Cpu *c, NvnCmdBuf *cb) {
 }
 
 static void draw_chain(Cpu *c, const char *kind, uint64_t count);
+static uint64_t g_trace_cb[16], g_trace_list[64];  // (LARECOMP_TRACE_COUNT, below)
+static int g_ntrace_cb, g_ntrace_list;
 NVN(nvnCommandBufferBeginRecording) {
     draw_chain(c, "begin", 0);
     static bool hooked;  // (hooks cost every game function a lookup: only with interpolation on)
@@ -121,6 +123,13 @@ NVN(nvnCommandBufferBeginRecording) {
 }
 NVN(nvnCommandBufferEndRecording) {
     NvnCmdBuf *cb = cb_of(A(0));
+    for (int i = 0; i < g_ntrace_cb; i++)
+        if (g_trace_cb[i] == A(0)) {  // (LARECOMP_TRACE_COUNT: this list holds the traced draw)
+            g_trace_cb[i] = g_trace_cb[--g_ntrace_cb];
+            if (g_ntrace_list < 64) g_trace_list[g_ntrace_list++] = cb->start;
+            LOG("[trace] list %llx holds the traced draw\n", (unsigned long long)cb->start);
+            break;
+        }
     rec(c, cb, CMD_END, 0);
     cb->recording = false;
     RET(cb->start);
@@ -373,13 +382,28 @@ NVN(nvnCommandBufferDiscardDepthStencil) { (void)c; }
 NVN(nvnCommandBufferDrawArrays) { draw_chain(c, "arrays", c->x[3]); Snap s = snap(c); obj_mark(c, cb_of(s.x[0])); CmdRec *r = record(c, CMD_DRAW_ARRAYS, 0, &s); r->x[3] = 0; r->x[4] = 1; }
 NVN(nvnCommandBufferDrawArraysInstanced) { draw_chain(c, "arrays_inst", c->x[3]); Snap s = snap(c); obj_mark(c, cb_of(s.x[0])); record(c, CMD_DRAW_ARRAYS, 0, &s); }
 // Debug: LARECOMP_TRACE_COUNT=<n> logs the guest call chain of indexed draws with n indices.
+// LARECOMP_TRACE_COUNT: the command lists that hold the traced draw (recorded once, called every frame): their
+// handles, so nvnCommandBufferCallCommands can log who calls them and in which present.
+static bool trace_list(uint64_t h) { for (int i = 0; i < g_ntrace_list; i++) if (g_trace_list[i] == h) return true; return false; }
+static void trace_chain(Cpu *c) {
+    uint64_t fp = c->x[29];
+    for (int i = 0; i < 14 && fp >= 0x7000000000ull && fp < 0x8000000000ull && (fp & 7) == 0; i++) {
+        uint64_t next = *(uint64_t *)(uintptr_t)fp, lr = *(uint64_t *)(uintptr_t)(fp + 8);
+        LOG(" %llx", (unsigned long long)lr);
+        if (next <= fp) break;
+        fp = next;
+    }
+    LOG("\n");
+}
 static void trace_draw(Cpu *c, uint64_t count) {
     static long want = -2;
     if (want == -2) want = getenv("LARECOMP_TRACE_COUNT") ? atol(getenv("LARECOMP_TRACE_COUNT")) : -1;
     if (want < 0 || (long)count != want) return;
     static int n;
-    if (n++ > 40) return;
-    LOG("[trace] draw count %llu lr %llx chain:", (unsigned long long)count, (unsigned long long)c->x[30]);
+    if (n++ > 4000) return;
+    if (g_ntrace_cb < 16) g_trace_cb[g_ntrace_cb++] = c->x[0];
+    extern uint64_t renderer_present_count(void);
+    LOG("[trace] f%llu draw count %llu lr %llx chain:", (unsigned long long)renderer_present_count(), (unsigned long long)count, (unsigned long long)c->x[30]);
     uint64_t fp = c->x[29];
     for (int i = 0; i < 14 && fp >= 0x7000000000ull && fp < 0x8000000000ull && (fp & 7) == 0; i++) {
         uint64_t next = *(uint64_t *)(uintptr_t)fp, lr = *(uint64_t *)(uintptr_t)(fp + 8);
@@ -517,7 +541,18 @@ PLAIN(nvnCommandBufferWaitEvent, CMD_WAIT_EVENT)
 PLAIN(nvnCommandBufferReportCounter, CMD_REPORT_COUNTER)
 NVN(nvnCommandBufferReportValue) { (void)c; }
 NVN(nvnCommandBufferResetCounter) { (void)c; }
-NVN(nvnCommandBufferCallCommands) { draw_chain(c, "call", A(1)); obj_mark(c, cb_of(A(0))); record_copy(c, CMD_CALL, 2, (uint32_t)A(1) * 8); }
+NVN(nvnCommandBufferCallCommands) {
+    if (g_ntrace_list) {
+        const uint64_t *h = (const uint64_t *)(uintptr_t)A(2);
+        for (uint64_t i = 0; i < A(1); i++)
+            if (trace_list(h[i])) {
+                extern uint64_t renderer_present_count(void);
+                LOG("[trace] f%llu call list %llx lr %llx chain:", (unsigned long long)renderer_present_count(), (unsigned long long)h[i],
+                    (unsigned long long)c->x[30]);
+                trace_chain(c);
+            }
+    }
+    draw_chain(c, "call", A(1)); obj_mark(c, cb_of(A(0))); record_copy(c, CMD_CALL, 2, (uint32_t)A(1) * 8); }
 NVN(nvnCommandBufferCopyCommands) { obj_mark(c, cb_of(A(0))); record_copy(c, CMD_CALL, 2, (uint32_t)A(1) * 8); }
 NVN(nvnCommandBufferInsertDebugMarker) { (void)c; }
 NVN(nvnCommandBufferInsertDebugMarkerDynamic) { (void)c; }

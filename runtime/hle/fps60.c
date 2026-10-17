@@ -301,6 +301,41 @@ __attribute__((constructor)) static void timer_users_init(void) {
     rt_register_fnhook(TIMER_GETTER, timer_users_hook);
 }
 
+// ---- research: LARECOMP_CALLCOUNT="<fn>[,...]" (+ LARECOMP_TIME_PROBE_FRAMES): calls per present of each function
+#define CC_MAX 8
+static uint64_t g_cc_fn[CC_MAX];
+static unsigned g_cc_n[CC_MAX];
+static int g_ncc;
+static long g_cc_frame = -1;
+static int callcount_hook(Cpu *c, uint64_t addr) {
+    long f = (long)renderer_present_count();
+    if (f != g_cc_frame) {
+        if (g_cc_frame >= g_tp_from && g_cc_frame <= g_tp_to) {
+            char line[256];
+            int o = snprintf(line, sizeof line, "[calls] present %ld:", g_cc_frame);
+            for (int i = 0; i < g_ncc; i++) o += snprintf(line + o, sizeof line - o, " f_%llx %u", (unsigned long long)g_cc_fn[i], g_cc_n[i]);
+            LOG("%s\n", line);
+        }
+        memset(g_cc_n, 0, sizeof g_cc_n);
+        g_cc_frame = f;
+    }
+    for (int i = 0; i < g_ncc; i++) if (g_cc_fn[i] == addr) g_cc_n[i]++;
+    (void)c;
+    return 0;
+}
+__attribute__((constructor)) static void callcount_init(void) {
+    const char *e = getenv("LARECOMP_CALLCOUNT");
+    if (!e) return;
+    const char *fr = getenv("LARECOMP_TIME_PROBE_FRAMES");
+    if (fr) { g_tp_from = atol(fr); g_tp_to = strchr(fr, '-') ? atol(strchr(fr, '-') + 1) : g_tp_from; }
+    char buf[512];
+    snprintf(buf, sizeof buf, "%s", e);
+    for (char *t = strtok(buf, ","); t && g_ncc < CC_MAX; t = strtok(NULL, ",")) {
+        g_cc_fn[g_ncc++] = strtoull(t, NULL, 16);
+        rt_register_fnhook(g_cc_fn[g_ncc - 1], callcount_hook);
+    }
+}
+
 // ---- research: LARECOMP_PROBE="<fn addr>[:<bytes>]" ----------------------------------------------------------------
 // At each entry of the function, remember its x0 (object) and, after the original returns, x0 (result): for the next
 // LARECOMP_PROBE_FRAMES (120) presents, compare `bytes` (0x400) of each of them with the previous present and log, at

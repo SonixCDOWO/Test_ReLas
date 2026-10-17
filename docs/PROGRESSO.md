@@ -26,8 +26,8 @@ _Atualizado em 15/10/2026._
 ## O que falta
 1. **Validar o 3D em mais cenas** (batalhas, Pokémon grandes, cidades): a correção dos modelos com esqueleto foi
    validada na Pallet Town. Histórico em [HISTORICO.md, parte 6](HISTORICO.md#parte-6-personagens-explodidos-resolvido).
-2. **Mira por movimento**: mouse (giroscópio virtual) e giroscópio real do controle (SDL, implementado em 16/10/2026,
-   **ainda não testado com um controle de verdade**: sentido dos eixos a confirmar; `LARECOMP_GYRO_PAD_FLIP=1|2|3` inverte
+2. **Mira por movimento**: mouse (giroscópio virtual) e giroscópio real do controle (SDL, escrito em 16/10/2026 e guardado fora do `main`
+   no `git stash` "giroscopio do controle"; **não testado com um controle de verdade**: sentido dos eixos a confirmar; `LARECOMP_GYRO_PAD_FLIP=1|2|3` inverte
    yaw/pitch). Sensibilidades no launcher. Falta: correção de deriva do pitch pelo acelerômetro.
 3. **Recursos online** (Pokémon GO, trocas, Poké Ball Plus): desligados de propósito (serviços offline).
 4. **Desempenho** (medido em 15/10/2026, `tools/perf_summary.py` sobre 4 min andando pela Rota 1): 30 fps estáveis
@@ -66,6 +66,13 @@ _Atualizado em 15/10/2026._
    - **Protótipo de interpolação removido** (15/10/2026): reexecutar cada quadro com os uniforms misturados funcionou
      para a câmera, mas sem marcações do próprio jogo (como o RT64 tem) deixava erros visíveis - objetos repetidos
      trocados (fantasmas), menus em branco, modelos esticados, clarões em efeitos. O jogo fica nos 30 fps originais.
+6. **Aura dos Pokémon especiais pisca** (também na release, a 30 fps): no vídeo do jogador (17/10/2026) a aura some por
+   exatamente 1 quadro do jogo, em intervalos irregulares, com o Pokémon no lugar. Descartados com medição: carimbos de
+   tempo da GPU (`LARECOMP_VK_COUNTER`), espera de sync, cópia de textura para a memória, interpolação, e um relógio do
+   sistema cravado por quadro (testado em jogo pelo jogador: igual). Ferramentas para continuar: `LARECOMP_COUNT_TEX=1024x256`
+   e `LARECOMP_COUNT_FS=<hash>` (desenhos por quadro), `LARECOMP_TRACE_COUNT` (listas que contêm um desenho e quem as
+   chama), `LARECOMP_CALLCOUNT`, `tools/blink_scan.py`. A rota de teste não tem Pokémon com aura; a gravação F9 altera o
+   próprio resultado (o primeiro quadro gravado perde os efeitos), então serve para estrutura, não para achar a piscada.
 
 ## Correções no runtime (resumo)
 | Área | Correção | Arquivo |
