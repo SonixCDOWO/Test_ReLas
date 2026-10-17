@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2 (2026-10-17)
+
+From the second patch in [issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1), thanks again to
+@porstobotgovna:
+
+- **No more crashes on the communication screens.** The network services (`nifm`, `ssl`, `bsd`, `ldn`) didn't exist:
+  the game got an empty session and closed when opening local wireless, Mystery Gift or internet co-op. They now
+  answer like a console that is offline. Tested on both games (Eevee and Pikachu 1.0.0): **local trade** searches for
+  a player and B goes back; **Mystery Gift** stays on "Connecting..." (that screen has no way out offline: the game
+  waits with no timeout and ignores B, as on a console without Nintendo's servers); the **Pokémon GO settings**
+  search and B goes back to the menu.
+- The other Bluetooth (`btm:u`) commands answer with no data, like a console with nothing paired.
+
 ## 0.2.1 (2026-10-17)
 
 From [issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1), with thanks to @porstobotgovna, who played

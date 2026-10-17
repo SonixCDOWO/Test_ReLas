@@ -94,7 +94,7 @@ accepted. What was tested:
 | Game language | the 9 languages of the game's own language screen, shown when starting a new game: English, Español, Français, Deutsch, Italiano, Japanese, Korean, Simplified and Traditional Chinese (tested). The game warns the choice can't be changed later, and an existing save keeps its language | |
 | Fan translations | Atmosphere / LayeredFS `romfs` packs, such as the Brazilian Portuguese one ([Translations](#translations-and-mods)) | patches that change the executable (`exefs` / IPS patches) |
 | Save data | saves created by this port (`save\save_0\savedata.bin`) | importing a Switch save: untested |
-| Extras | | the Poké Ball Plus, Pokémon GO / GO Park, online play, the second player |
+| Extras | the communication screens open without crashing (local trade searches and B goes back; Mystery Gift waits on "Connecting...", which the game gives no way out of offline) | the Poké Ball Plus, Pokémon GO / GO Park transfers, local and online play, Mystery Gift, the second player |
 
 The launcher reads the program id in your `exefs/main.npdm` and refuses anything other than the two games, saying
 why. The 60 fps and wild battles options need the 1.0.0 `main` of either game (build id starting with `0A3F0D21E67DAD80`
