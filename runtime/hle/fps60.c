@@ -71,6 +71,13 @@ static int scene_hook(Cpu *c, uint64_t addr) {
     return 0;
 }
 
+// A battle the game starts without BATTLE_START: the wild battles mode builds it through the static battles' process
+// (runtime/hle/wildbattle.c), which never calls it. Without this it counted as a menu and got in-between images.
+void fps60_scene_begin(void) {
+    g_scene = true;
+    if (!g_all60) g_special = true;
+}
+
 static bool g_field_ran;  // the world's update ran since the last present
 static bool g_played;     // the world has updated at least once (before: the controller screen, the title, loading)
 static int field_hook(Cpu *c, uint64_t addr) {
@@ -182,8 +189,12 @@ void fps60_present(void) {
     if (menu_native < 0) menu_native = getenv("LARECOMP_FPS60_MENU_NATIVE") != NULL;
     bool w = !g_special && (g_field_ran || menu_native);
     g_field_ran = false;
-    if (w != g_world) LOG("[fps60] %s from present %llu\n", w ? "world: 60 fps" : "menu / battle / capture: 30 fps", (unsigned long long)renderer_present_count());
     g_world = w;
+    static int last = -1;  // 0 world, 1 menu (in-between images), 2 battle / capture
+    int state = w ? 0 : fps60_menu() ? 1 : 2;
+    static const char *const name[] = {"world: 60 fps", "menu: 30 fps with in-between images", "battle / capture: 30 fps"};
+    if (state != last) LOG("[fps60] %s from present %llu\n", name[state], (unsigned long long)renderer_present_count());
+    last = state;
 }
 
 // Before each boot (runtime/main.c): the launcher's "60 fps (experimental)" (larecomp.ini fps = 60) turns the mode on

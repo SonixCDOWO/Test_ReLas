@@ -188,6 +188,8 @@ static int trigger_hook(Cpu *c, uint64_t addr) {
     c->x[0] = mgr;
     c->x[1] = alloc;
     c->x[8] = (uint64_t)(uintptr_t)out;
+    extern void fps60_scene_begin(void);  // (runtime/hle/fps60.c: a battle, 30 fps without in-between images)
+    fps60_scene_begin();
     rt_call_original(c, STATIC_FACTORY);
     g_pending = false;
     LOG("[wild] factory returned, handle %llx\n", (unsigned long long)out[0]);
