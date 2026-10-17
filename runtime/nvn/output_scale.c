@@ -23,9 +23,18 @@ static double g_dyn_gpu_sum, g_dyn_dt_sum, g_last_t;
 static int g_dyn_n, g_dyn_gpu_n, g_dyn_good;
 static double g_dyn_cool_until, g_dyn_probe_wait = 5.0, g_dyn_probe_at;
 static double g_dyn_last_raise = -100;
+static double g_dyn_target_ms;
 
-static void dyn_update(double now, double gpu_ms) {
-    double dt = g_last_t > 0 ? (now - g_last_t) * 1000.0 : 16.7;
+static void dyn_update(double now, double gpu_ms, double target_ms) {
+    // Do not mix 30 Hz scene samples with 60 Hz world/menu samples.
+    if (g_dyn_target_ms != target_ms) {
+        g_dyn_target_ms = target_ms;
+        g_last_t = now;
+        g_dyn_dt_sum = g_dyn_gpu_sum = 0;
+        g_dyn_n = g_dyn_gpu_n = g_dyn_good = 0;
+        return;
+    }
+    double dt = g_last_t > 0 ? (now - g_last_t) * 1000.0 : target_ms;
     g_last_t = now;
     if (dt > 250) return;  // (loading, menus, a stall: not the GPU's steady state)
     g_dyn_dt_sum += dt;
@@ -37,15 +46,17 @@ static void dyn_update(double now, double gpu_ms) {
     g_dyn_n = g_dyn_gpu_n = 0;
     if (now < g_dyn_cool_until) return;
     double prev = g_dyn;
-    bool slow = avg_dt > 17.4 || (avg_gpu >= 0 && avg_gpu > 14.5);
+    bool slow = avg_dt > target_ms * (17.4 / 16.666667) ||
+                (avg_gpu >= 0 && avg_gpu > target_ms * (14.5 / 16.666667));
     if (slow) {
-        g_dyn = fmax(0.5, g_dyn - (avg_dt > 22 ? 0.1 : 0.05));
+        g_dyn = fmax(0.5, g_dyn - (avg_dt > target_ms * (22.0 / 16.666667) ? 0.1 : 0.05));
         g_dyn_good = 0;
         if (now - g_dyn_last_raise < 3.0) g_dyn_probe_wait = fmin(g_dyn_probe_wait * 2, 60.0);  // raised too eagerly
     } else if (g_dyn < 1.0) {
         g_dyn_good++;
         // with GPU timing: raise when there is clear headroom; without (Vulkan): probe upwards now and then
-        bool room = avg_gpu >= 0 ? avg_gpu < 10.5 && g_dyn_good >= 4 : now >= g_dyn_probe_at && g_dyn_good >= 2 * (int)g_dyn_probe_wait;
+        bool room = avg_gpu >= 0 ? avg_gpu < target_ms * (10.5 / 16.666667) && g_dyn_good >= 4 :
+                                   now >= g_dyn_probe_at && g_dyn_good >= 2 * (int)g_dyn_probe_wait;
         if (room) { g_dyn = fmin(1.0, g_dyn + 0.05); g_dyn_good = 0; g_dyn_last_raise = now; g_dyn_probe_at = now + g_dyn_probe_wait; }
     }
     g_dyn = round(g_dyn * 20) / 20;
@@ -73,7 +84,12 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
     else if (mode >= 1 && mode <= 8) h = mode;
     else {
         h = reshape ? dh / 1080.0 : fit;  // Match display
-        if (mode == RES_DYNAMIC) { dyn_update(now, gpu_ms); h *= g_dyn; }
+        if (mode == RES_DYNAMIC) {
+            extern bool fps60_enabled(void), fps60_world(void), fps60_menu(void);
+            bool at_60 = fps60_enabled() && (fps60_world() || fps60_menu());
+            dyn_update(now, gpu_ms, at_60 ? 16.666667 : 33.333333);
+            h *= g_dyn;
+        }
         else if (mode == RES_Q75) h *= 0.75;
         else if (mode == RES_Q25) h *= 0.25;
         else if (mode == RES_Q50) h *= 0.5;
