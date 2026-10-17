@@ -12,6 +12,8 @@ From the second patch in [issue #1](https://github.com/raulzrrs/letsgo-recomp/is
   waits with no timeout and ignores B, as on a console without Nintendo's servers); the **Pokémon GO settings**
   search and B goes back to the menu.
 - The other Bluetooth (`btm:u`) commands answer with no data, like a console with nothing paired.
+- Tested with the zip downloaded from this release, unzipped over 0.2.1 installs of both games (no recompiling
+  needed): each one boots a save and reaches the local trade search.
 
 ## 0.2.1 (2026-10-17)
 
