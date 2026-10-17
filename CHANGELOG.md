@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.1 (2026-10-17)
+
+From [issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1), with thanks to @porstobotgovna, who played
+*Let's Go, Pikachu!* 1.0.2 on an AMD RX 7800 XT with Windows 10 and sent a patch:
+
+- **Supports *Let's Go, Pikachu!*** (and updated games): the launcher accepts either game by its program id, shows
+  which one is set up, keeps Pikachu's saves in `save-pikachu\` and installs translations for the set-up game.
+  Tested here with Pikachu 1.0.0: setup (13 to 17 minutes), a new game through the title movie, Professor Oak and the
+  name screen, and played (from a copy of an Eevee save) with 60 fps, wild battles and the PT-BR translation. Each
+  folder holds one set-up game: to have both, unzip the release twice. **60 fps and wild battles work on Pikachu 1.0.0 too:** their hooks and the generator's instruction patches
+  are addresses in the game's executable, now in a table per build (the same functions in Pikachu, found by comparing
+  the code instruction by instruction, `tools/addrmap.py`). Other builds (the updates) get neither (greyed out on the
+  start screen). The game is told its real version (1.0.0 / 1.0.2) instead of always 1.0.0.
+- **Fixes a crash at boot (`c0000005` accessing `0x38`) on some Windows 10 machines**, whose Yu Gothic Regular font
+  breaks the game's font engine: Yu Gothic Medium and MS Gothic come first now. `LARECOMP_FONT=<file>` overrides it.
+- **Pokémon GO Park settings:** the game waited on a Bluetooth pairing event that was never created and aborted; the
+  event exists now, and a wait on an empty handle slot waits on the others.
+- **Fixes wild battles with 60 fps on (0.2.0, both games):** the battle counted as a menu and got in-between frames;
+  it runs at 30 fps like the game's own battles now.
+- Flat dumps (the code files next to the RomFS's `bin/`) are set up too.
+- The overlay (close the game?, name entry) speaks English, Portuguese or Russian, from the system language
+  (`LARECOMP_LANG=en|pt|ru`).
+- Crash reports list the last calls to the host, and the previous run's log is kept as `lasrecomp-prev.log`.
+
 ## 0.2.0 (2026-10-17)
 
 Two experimental options on the start screen, both off by default:

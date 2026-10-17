@@ -1,6 +1,6 @@
 # Let's Go Recomp
 
-A native Windows port of **Pokémon: Let's Go, Eevee!** (Nintendo Switch, v1.0.0) made by **static recompilation**.
+A native Windows port of **Pokémon: Let's Go, Eevee!** and **Let's Go, Pikachu!** (Nintendo Switch) made by **static recompilation**.
 The game's ARM64 code is translated into C and compiled into a regular Windows program; a runtime stands in for the
 Switch's operating system (kernel, system services, NVN graphics on Vulkan, audio, controllers, touch screen).
 **It is not an emulator.**
@@ -14,8 +14,8 @@ original has none) · **16x anisotropic filtering** · the game's own **30 fps**
 keyboard, mouse and any controller · fan translations in one click.
 
 > [!IMPORTANT]
-> **No game files are included.** You need your own legally obtained copy of *Pokémon: Let's Go, Eevee!*
-> **version 1.0.0**, extracted (the `exefs` and `romfs` folders). This repository does not provide the game, its
+> **No game files are included.** You need your own legally obtained copy of *Pokémon: Let's Go, Eevee!* or
+> *Pikachu!*, extracted (the `exefs` and `romfs` folders). This repository does not provide the game, its
 > keys, or instructions on how to obtain them. Nothing from the game (code, graphics, text, music, fonts) is part of
 > this repository or of its releases.
 
@@ -62,9 +62,9 @@ keyboard, mouse and any controller · fan translations in one click.
 ## Status
 
 **Playable.** The opening movie, the introduction, exploring, wild captures, trainer battles, menus, the Pokédex,
-Play with Eevee, and saving and loading all work, at a **stable 30 fps** (the game's own frame rate) at any
-resolution from 720p to 4K. Only the **Eevee** version, **v1.0.0**, on **Windows**. It has not been played from
-start to finish yet: see [What was tested](#what-was-tested).
+Play with your partner, and saving and loading all work, at a **stable 30 fps** (the game's own frame rate) at any
+resolution from 720p to 4K, on **Windows**. Most of the testing was with **Eevee v1.0.0**; **Pikachu** is accepted since
+0.2.1 (see [Supported game version](#supported-game-version)). It has not been played from start to finish yet: see [What was tested](#what-was-tested).
 
 ## Requirements
 
@@ -75,19 +75,20 @@ start to finish yet: see [What was tested](#what-was-tested).
 | GPU | a driver with **Vulkan 1.3**: GPUs that report less are skipped. AMD lists Vulkan 1.3 for Radeon RX Vega and RDNA cards; for any GPU, [gpuinfo.org](https://vulkan.gpuinfo.org) shows the version its driver reports |
 | RAM | the game used up to **3.8 GB** while playing (peak working set, measured in Viridian City). The one-time setup peaked at **5.2 GB** (one compiler per CPU thread, fewer when RAM is short). Tested only on a 32 GB machine |
 | Disk | about **6 GB** free: 5.7 GB at the peak of the one-time setup, 4.6 GB afterwards (measured) |
-| Game | your own extracted *Pokémon: Let's Go, Eevee!* **v1.0.0** (base game, no update): see [Supported game version](#supported-game-version) |
+| Game | your own extracted *Pokémon: Let's Go, Eevee!* or *Pikachu!*: see [Supported game version](#supported-game-version) |
 
 Only tested so far on Windows 11 with an Intel Core i5-14600KF, 32 GB of RAM and an NVIDIA GeForce RTX 3080. Reports
 from other CPUs and GPUs (AMD, Intel) are very welcome.
 
 ## Supported game version
 
-The recompiled code is tied to one exact executable, so only this is accepted:
+The game code is recompiled from your own executable during the setup, so either game and any version of it is
+accepted. What was tested:
 
 | | Supported | Not supported |
 |---|---|---|
-| Game | *Pokémon: Let's Go, Eevee!*, title id `0100187003A36000` | *Let's Go, Pikachu!* (title id `010003F003A34000`): a separate title, never tested |
-| Version | **1.0.0**, the base game | the 1.0.1 (January 2019) and 1.0.2 (July 2019) updates |
+| Game | *Pokémon: Let's Go, Eevee!* (title id `0100187003A36000`) and, since 0.2.1, *Let's Go, Pikachu!* (`010003F003A34000`). Pikachu 1.0.0 was tested here from the setup to the name screen of a new game; a player reported Pikachu 1.0.2 playable up to receiving Pikachu ([issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1)) | |
+| Version | **1.0.0**, the base game, of either: the only builds with the experimental **60 fps** and **wild battles** options, which work on addresses of the game's executable (mapped for both, `tools/addrmap.py`); the launcher greys them out for any other | the 1.0.1 (January 2019) and 1.0.2 (July 2019) updates are accepted, without those options, but untested here |
 | Files | the extracted **`exefs`** folder (`main`, `main.npdm`, `rtld`, `sdk`, `subsdk0`, `subsdk1`) and the **`romfs`** folder, or a `romfs.bin` image (both tested) | `.xci`, `.nsp`, `.nsz`, `.xcz` or `.nca` files: extract them first |
 | Region | the same title id is listed in the US, UK, Brazil, Japan, Korea and Hong Kong / Taiwan eShops, with the same two updates for all of them ([titledb](https://github.com/blawar/titledb)). Switch updates are patches over the base game, so every region's 1.0.0 is the same. Tested with one dump, from a cartridge | |
 | Game language | the 9 languages of the game's own language screen, shown when starting a new game: English, Español, Français, Deutsch, Italiano, Japanese, Korean, Simplified and Traditional Chinese (tested). The game warns the choice can't be changed later, and an existing save keeps its language | |
@@ -95,9 +96,9 @@ The recompiled code is tied to one exact executable, so only this is accepted:
 | Save data | saves created by this port (`save\save_0\savedata.bin`) | importing a Switch save: untested |
 | Extras | | the Poké Ball Plus, Pokémon GO / GO Park, online play, the second player |
 
-The launcher reads the build id of your `exefs/main` (the 1.0.0 executable's starts with `0A3F0D21E67DAD80`) and
-refuses any other, saying why. If your console has an update installed, dump the base game (the cartridge, or the
-base title rather than the update): an updated `main` has another build id.
+The launcher reads the program id in your `exefs/main.npdm` and refuses anything other than the two games, saying
+why. The 60 fps and wild battles options need the 1.0.0 `main` of either game (build id starting with `0A3F0D21E67DAD80`
+for Eevee, `1C375692DE4F4B87` for Pikachu).
 
 ## How to play
 
@@ -107,14 +108,18 @@ base title rather than the update): an updated `main` has another build id.
    your PC"*: click **More info**, then **Run anyway**.
 4. Click **Select game folder...** and choose the folder with your extracted game: the one holding `exefs` and
    `romfs` (a `romfs.bin` image works too), or any folder above it.
-5. The launcher checks the files are *Let's Go, Eevee!* v1.0.0, copies them and **recompiles the game code for your
+5. The launcher checks the files are *Let's Go, Eevee!* or *Pikachu!*, copies them and **recompiles the game code for your
    PC**. This happens only once and takes a while: 13 minutes (measured) on a 20-thread Core i5-14600KF, longer on
    CPUs with fewer threads. A progress bar shows how far it got.
 6. Click **Play**.
 
 ![The launcher](docs/launcher.png)
 
-Settings (`larecomp.ini`), saves (`save\`), the game files (`extracted\`), translations (`mods\`), shader caches
+**Both games:** a folder holds one set-up game (its `extracted\` folder), so to have *Eevee* and *Pikachu* side by side
+unzip the release twice (for example `LetsGoRecomp-Eevee` and `LetsGoRecomp-Pikachu`) and set each one up with its game.
+**Change...** on the start screen swaps the game in that folder instead (setting it up again).
+
+Settings (`larecomp.ini`), saves (`save\`; `save-pikachu\` for Pikachu), the game files (`extracted\`), translations (`mods\`), shader caches
 (`cache\`) and the log (`lasrecomp.log`) are all kept in that folder: to back up or move the game, copy the folder.
 
 ## Features
@@ -131,7 +136,7 @@ Settings (`larecomp.ini`), saves (`save\`), the game files (`extracted\`), trans
   bindings. In English, or in Brazilian Portuguese when Windows is.
 - **Keyboard and mouse:** all keys can be rebound in the launcher. The mouse aims Poké Balls like the Switch's motion
   controls and acts as your finger on the touch screen.
-- **Controllers:** through SDL 3's gamepad support, with the handheld-mode layout (tested with one gamepad so far). Play with Eevee works with a controller alone (the right stick moves a virtual finger).
+- **Controllers:** through SDL 3's gamepad support, with the handheld-mode layout (tested with one gamepad so far). Play with your partner works with a controller alone (the right stick moves a virtual finger).
 - **Translations and mods:** Atmosphere-style LayeredFS mods, installed from the downloaded file with one click.
 - **Experimental options** (start screen, off by default):
   - **60 fps:** the overworld at 60 fps natively (the game's time step is halved there, so nothing speeds up); menus
@@ -154,7 +159,7 @@ The game runs in handheld mode (one player).
 | + partner / − Pokédex | `=` / `-` | | + / − |
 | D-pad | arrow keys | | D-pad |
 | Aim a Poké Ball | WASD | move (after "Get ready") | left stick |
-| Touch screen (Play with Eevee) | | hold the left button | right stick + hold ZR |
+| Touch screen (Play with your partner) | | hold the left button | right stick + hold ZR |
 | Close the game | Esc | | − and + together |
 
 While you aim a Poké Ball the mouse is captured by the window; outside of aiming it is free. Mouse sensitivity is
@@ -167,7 +172,7 @@ Atmosphere LayeredFS packs, and those work as they are:
 
 1. Click **Install a translation...** in the launcher.
 2. Pick the file you downloaded (`.zip`, `.rar` or `.7z`, as it came), and the launcher unpacks it and finds the
-   `romfs` folder for *Let's Go, Eevee!* (title id `0100187003A36000`) inside it. Packs made for both games are fine.
+   `romfs` folder for the game you set up (by its title id) inside it. Packs made for both games are fine.
 3. Choose it under **Translation**. "None (English)" goes back to the original game.
 4. A translation replaces the texts of one or more of the game's languages, so the game has to be in one of them.
    The Brazilian Portuguese pack replaces English and Spanish: pick English or Español on the game's language screen
@@ -182,7 +187,8 @@ It is not included in this repository or in the releases; it is distributed by i
 ## What was tested
 
 Tested by playing on Windows 11, RTX 3080, 1920x1080 monitor, with keyboard and mouse and with a controller, plus
-scripted input runs (recorded inputs replayed frame by frame, see [docs/DEPURACAO.md](docs/DEPURACAO.md)):
+scripted input runs (recorded inputs replayed frame by frame, see [docs/DEPURACAO.md](docs/DEPURACAO.md)). Everything
+below is *Eevee* 1.0.0 unless the row says otherwise:
 
 | Area | Result |
 |---|---|
@@ -202,14 +208,17 @@ scripted input runs (recorded inputs replayed frame by frame, see [docs/DEPURACA
 | Keyboard rebinding; playing with a controller | ✅ |
 | 60 fps (experimental): world, menus and Pokédex at 60 without speed-ups; battles and captures at normal speed | ✅ played |
 | Wild battles (experimental): battle, then capture, back to the world (Route 1) | ✅ played |
+| *Pikachu* 1.0.0: setup, new game up to the name screen, the world, menus, 60 fps, wild battles and captures (from a copy of an Eevee save), the PT-BR translation, the Pokémon GO settings screen | ✅ played |
+| *Pikachu* 1.0.2 (another player, [issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1)): AMD RX 7800 XT, Windows 10, up to receiving Pikachu | ✅ reported |
 
-**Not tested yet:** the rest of the story past Viridian City (gyms, other cities and caves, the Elite Four), every
+**Not tested yet:** a whole *Pikachu* playthrough (its own new game past the name screen, Play with Pikachu, its
+exclusive Pokémon), the 1.0.1 / 1.0.2 updates here, the rest of the story past Viridian City (gyms, other cities and caves, the Elite Four), every
 move animation and every Pokémon, AMD and Intel GPUs, laptops, other Windows versions, Steam Deck / Linux.
 
 ## Known issues and limitations
 
-- **Only *Let's Go, Eevee!* v1.0.0.** Updates (v1.0.1, v1.0.2) are not supported. *Let's Go, Pikachu!* uses a
-  different executable and is not supported yet.
+- **Tested mostly with *Let's Go, Eevee!* v1.0.0.** *Let's Go, Pikachu!* and the updates are accepted but much less
+  tested; the experimental 60 fps and wild battles options need the 1.0.0 (base game) of either.
 - **Windows only.** The Linux code path comes from LAS Recomp and builds in principle, but has never been tested
   with this game.
 - **60 fps is experimental and partial.** The game advances most of its logic one step per frame: only the
@@ -291,10 +300,12 @@ so it cannot be distributed. The release ships the tools instead, and builds it 
 **Can I use my save from the Switch?** Not tested. The port keeps the file the game itself writes, at
 `save\save_0\savedata.bin`, but importing one from a console has never been tried.
 
-**Does it work with Let's Go, Pikachu!?** Not yet. It is a separate title (`010003F003A34000`) with its own
-executable, which the launcher doesn't accept, and it has never been tested.
+**Does it work with Let's Go, Pikachu!?** Since 0.2.1, yes, with its own save folder (`save-pikachu\`). Tested
+here with 1.0.0 up to the name screen of a new game; a player played 1.0.2 up to receiving Pikachu (issue #1). The
+experimental 60 fps and wild battles options work with Pikachu 1.0.0 too.
 
-**Can I use an updated game (v1.0.1 / v1.0.2)?** No, only the base v1.0.0. The launcher checks this.
+**Can I use an updated game (v1.0.1 / v1.0.2)?** It is accepted since 0.2.1, but not tested here, and the
+experimental options stay off for it (they need the 1.0.0 of either game).
 
 **The launcher says the files are packed (.xci / .nsp).** Extract the game's `exefs` and `romfs` first, with your
 usual tool, from your own dump.
@@ -343,7 +354,7 @@ Most internal documentation is in Portuguese.
 ## Legal
 
 This is a fan project with no affiliation with, endorsement or sponsorship by Nintendo, The Pokémon Company, Game
-Freak or Creatures. *Pokémon* and *Pokémon: Let's Go, Eevee!* are trademarks of their respective owners. No game
+Freak or Creatures. *Pokémon*, *Pokémon: Let's Go, Eevee!* and *Pokémon: Let's Go, Pikachu!* are trademarks of their respective owners. No game
 files, code, graphics, text, music or fonts are included. To play, you must provide your own legally obtained copy.
 
 ## License
@@ -356,11 +367,13 @@ covers this code only and grants no rights to the game.
 
 ## Português
 
-**Let's Go Recomp** é um port nativo para Windows do *Pokémon: Let's Go, Eevee!* (Switch, v1.0.0) feito por
+**Let's Go Recomp** é um port nativo para Windows do *Pokémon: Let's Go, Eevee!* e do *Pikachu!* (Switch) feito por
 recompilação estática, baseado no [LAS Recomp](https://github.com/peiikai/LASRecomp). **Nenhum arquivo do jogo vem
 junto:** você precisa da sua própria cópia, obtida legalmente, extraída (pastas `exefs` e `romfs`).
 
-**Versão aceita:** só o *Let's Go, Eevee!* **1.0.0**, o jogo base, sem atualização (o Pikachu ainda não funciona).
+**Versões aceitas:** *Let's Go, Eevee!* e, desde a 0.2.1, *Pikachu!*, em qualquer versão. O mais testado é o Eevee
+**1.0.0**; as opções experimentais de 60 fps e batalhas selvagens valem para a 1.0.0 dos dois jogos. O Pikachu 1.0.0 foi testado até a tela do
+nome de um jogo novo, e um jogador relatou o 1.0.2 jogável até receber o Pikachu.
 Cartucho ou eShop de qualquer região: o jogo tem o mesmo title id (`0100187003A36000`) e as mesmas atualizações nas
 lojas dos EUA, Reino Unido, Brasil, Japão, Coreia e Hong Kong / Taiwan.
 Arquivos `.xci` / `.nsp` precisam ser extraídos antes. Detalhes em

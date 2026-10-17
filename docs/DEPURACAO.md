@@ -10,6 +10,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_NPAD=handheld\|fullkey\|dual\|left\|right` | como o controle do PC aparece para o jogo (padrão: `handheld`) |
 | `LARECOMP_FPS=<n>` | força n fps (padrão: o intervalo do jogo, 30 fps; `0` = sem limite) |
 | `LARECOMP_NO_AUDIO=1` | sem áudio (testes automáticos) |
+| `LARECOMP_FONT=<arquivo>` | fonte do sistema entregue ao jogo no lugar da lista padrão (`runtime/hle/pl.c`; a Yu Gothic Regular de alguns Win10 derruba o motor de fontes, issue #1) |
+| `LARECOMP_LANG=en\|pt\|ru` | idioma do menu sobreposto (fechar o jogo, teclado do nome); sem ela, o idioma do sistema |
 | `LARECOMP_SWKBD_UTF8=1` | teclado devolve UTF-8 em vez de UTF-16 |
 | `LARECOMP_GYRO_TEST=x\|y\|z` | giroscópio virtual oscilando ±15° no eixo dado (`z+` / `x-`...: giro de 10° em rampa 1 s depois do início da mira); loga quando o jogo lê o sensor. Para chegar a uma captura: andar pela grama (`STICK_*`) e apertar A no "Get ready"; o encontro é sorteado, repita até o log ter `sensor started` |
 | `mod` / `game_lang` (larecomp.ini) | mod ativo (`mods/<nome>/`, o log mostra `[mods]` e quantos arquivos do romfs foram trocados) / idioma pedido ao sistema (`en-US`, `es`...; um save existente mantém o seu) |
@@ -39,6 +41,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_THREAD_DUMP=<s>[,<repete s>]` | lista cada thread: svc em que está bloqueada, argumentos e pilha do guest |
 | `LARECOMP_TRACE_SVC=1` | loga cada chamada de sistema (muito volume) |
 | `tools/addr2sym.py <endereço> [-d <bytes>]` | módulo, símbolo mais próximo e disassembly de um endereço do guest |
+| `tools/addrmap.py <main de> <main para> <endereço>... [d:<dado>]` | o mesmo código (ou dado) em outro build do `main` (Eevee <-> Pikachu, atualização): compara as instruções com os campos relativos mascarados até achar uma só. Os endereços do runtime vão em `runtime/fnhook.c` e `tools/patches.py` (regra de paridade, CLAUDE.md) |
 | `nm build/lasrecomp.exe` | símbolos do runtime para endereços `lasrecomp+0x...` |
 
 ## Gráficos

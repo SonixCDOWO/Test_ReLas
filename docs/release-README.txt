@@ -1,15 +1,15 @@
 Let's Go Recomp
 ===============
 
-A native Windows port of Pokemon: Let's Go, Eevee! (Nintendo Switch, v1.0.0) by static recompilation.
+A native Windows port of Pokemon: Let's Go, Eevee! and Pikachu! (Nintendo Switch) by static recompilation.
 Project page, full documentation and source code: https://github.com/raulzrrs/letsgo-recomp
 
-NO GAME FILES ARE INCLUDED. You need your own legally obtained copy of Pokemon: Let's Go, Eevee! version 1.0.0,
+NO GAME FILES ARE INCLUDED. You need your own legally obtained copy of Pokemon: Let's Go, Eevee! or Pikachu!,
 extracted (the exefs and romfs folders).
 
-Supported: Pokemon: Let's Go, Eevee! (title id 0100187003A36000), version 1.0.0 only: the base game, without the
-1.0.1 / 1.0.2 updates. Cartridge or eShop: every region's eShop lists the same title id and updates.
-Not supported yet: Let's Go, Pikachu!.
+Supported: Pokemon: Let's Go, Eevee! (title id 0100187003A36000) and Pikachu! (010003F003A34000), any version.
+The experimental options below need version 1.0.0 (the base game) of either; Pikachu 1.0.0
+was tested up to the name screen of a new game. Cartridge or eShop, any region.
 Packed files (.xci, .nsp, .nsz, .nca) must be extracted first.
 
 Requirements
@@ -32,11 +32,15 @@ How to play
 5. Click Play.
 
 Experimental options (start screen, off by default)
+(Version 1.0.0 of either game: greyed out for updated games.)
 - 60 fps: the overworld at 60 fps without speed-ups; menus and the Pokedex smoothed; battles and captures stay at 30.
 - Wild battles: touching a wild Pokemon starts a classic battle against it, then the capture.
 The controller stick dead zone is under "Keyboard and mouse".
 
-Everything stays in this folder: settings (larecomp.ini), saves (save\), the game files (extracted\), translations
+Both games: one folder holds one set-up game, so unzip this twice (e.g. LetsGoRecomp-Eevee and LetsGoRecomp-Pikachu)
+and set each one up with its game.
+
+Everything stays in this folder: settings (larecomp.ini), saves (save\, or save-pikachu\ for Pikachu), the game files (extracted\), translations
 (mods\) and the log (lasrecomp.log). To move or back up the game, move or copy the whole folder.
 
 Translations
@@ -54,13 +58,13 @@ Controls
 Keyboard: WASD walk, Space/Enter = A, Q/Backspace = B, Tab = X (menu), R = Y, Z/C = L/R, = and - = Plus/Minus,
 arrows = D-pad, Esc = close. All keys can be changed on the start screen.
 Mouse: aims Poke Balls (like the Switch's motion controls), left button throws; outside of aiming, the left button is
-a finger on the touch screen (Play with Eevee). Right button = B.
+a finger on the touch screen (Play with your partner). Right button = B.
 Controllers: any controller SDL recognizes (Xbox, PlayStation, Switch Pro...), handheld-mode layout. The right stick
 plus ZR is a finger on the touch screen.
 
 Troubleshooting
 ---------------
-- "Not Pokemon: Let's Go, Eevee! version 1.0.0": updates are not supported; use the base game files.
+- "Not Pokemon: Let's Go, Eevee! or Pikachu!": pick the folder of your own extracted game.
 - Packed game files (.xci / .nsp) must be extracted first.
 - "The game code builder is missing": your antivirus may have quarantined lasgen\lasgen.exe (a PyInstaller
   program, sometimes flagged by mistake). Restore it or add this folder as an exception.

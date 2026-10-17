@@ -3,16 +3,17 @@
 Estado atual do port. A história completa, com cada problema e como foi resolvido, está em
 [HISTORICO.md](HISTORICO.md). As ferramentas de diagnóstico estão em [DEPURACAO.md](DEPURACAO.md).
 
-_Atualizado em 15/10/2026._
+_Atualizado em 17/10/2026._
 
 ## O que funciona
 | Área | Estado |
 |---|---|
 | Boot | completo: 4 módulos, SDK, construtores, threads, serviços do sistema |
+| Jogos | *Let's Go, Eevee!* e, desde a 0.2.1, *Pikachu!* (program id no `main.npdm`), em qualquer versão. Paridade: toda feature vale para os dois (CLAUDE.md); os endereços fixos (60 fps, batalhas selvagens, remendos do gerador) têm tabela por build para a 1.0.0 dos dois (`runtime/fnhook.c`, `tools/patches.py`, mapeados com `tools/addrmap.py`); atualizações rodam sem essas opções. Pikachu 1.0.0 testado: setup, jogo novo até o nome, mundo, menus, 60 fps, batalha selvagem e captura (save copiado do Eevee), tradução PT-BR, GO Park. Falta: jogo novo do Pikachu além do nome, Brincar com o Pikachu, Pokémon exclusivos |
 | Controle | gamepad do PC como modo portátil (seleção de controle aceita) |
 | Traduções / mods | pasta `mods/<nome>/` no formato do Atmosphere (LayeredFS): arquivos do romfs trocados ou adicionados, escolhida no launcher ("Tradução"). Testada com a tradução PT-BR de fãs (Pokémon Switch Brasil, v3.1): textos, menus e imagens em português. Instalar: botão "Instalar tradução..." do launcher com o arquivo baixado (.zip/.rar/.7z), ou copiar o `romfs` do Eevee para `mods/<nome>/romfs` |
 | Release | `LetsGoRecomp.exe` num zip (`make dist`): o jogador escolhe a pasta do jogo no launcher, que confere a v1.0.0, copia os arquivos e recompila o código do jogo no PC dele (gerador congelado + Zig); launcher em inglês ou português |
-| Tela de toque (Brincar com Eevee) | mouse: botão esquerdo segurado é o dedo; controle: analógico direito move um dedo (círculo na tela) e ZR segurado toca. Acariciar, abrir a bandeja de frutas e levar a fruta até a boca funcionam (testado só com controle: o Eevee comeu). Funciona em qualquer tamanho e proporção de janela |
+| Tela de toque (Brincar com o parceiro) | mouse: botão esquerdo segurado é o dedo; controle: analógico direito move um dedo (círculo na tela) e ZR segurado toca. Acariciar, abrir a bandeja de frutas e levar a fruta até a boca funcionam (testado só com controle: o Eevee comeu). Funciona em qualquer tamanho e proporção de janela |
 | Teclado e mouse | WASD anda / mira, Espaço ou Enter = A, Q ou Backspace = B, Tab = X (menu), R = Y, Z / C = L / R, `=` / `-` = Plus / Minus, setas = d-pad. Mouse: na mira da Poké Ball (depois do "Get ready") ele é preso à janela: movimento = mira (giroscópio virtual), esquerdo = arremessar; fora dela fica livre e o botão esquerdo é um dedo na tela de toque (Brincar com Eevee: acariciar); direito = B sempre. As teclas e a sensibilidade do mouse se trocam no launcher ("Teclado e mouse") |
 | Vídeo de abertura | imagem e áudio corretos, 1080p, termina e segue para o jogo |
 | Áudio | música e efeitos (Opus via `hwopus`), áudio dos vídeos sem cortes |

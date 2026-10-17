@@ -11,7 +11,8 @@ Leva por volta de meia hora, quase toda esperando downloads e a compilação.
 - GPU com Vulkan 1.3 e driver atualizado (NVIDIA, AMD ou Intel recentes)
 - Uns 10 GB livres (arquivos do jogo, código gerado e build)
 - [Git for Windows](https://git-scm.com/download/win) (traz o Git Bash)
-- **Os seus próprios arquivos do jogo**: *Pokémon: Let's Go, Eevee!* **v1.0.0**, extraídos da sua cópia. Este
+- **Os seus próprios arquivos do jogo**: *Pokémon: Let's Go, Eevee!* ou *Pikachu!*, extraídos da sua cópia (o Eevee
+  **v1.0.0** é o mais testado; as opções experimentais pedem a 1.0.0 de um dos dois). Este
   projeto não fornece nem ensina a obter esses arquivos ou as chaves.
 
 ## 1. Baixar o projeto
@@ -52,7 +53,7 @@ recompilam em segundos.
 ```
 
 No launcher, clique em **Selecionar pasta do jogo...** e escolha a pasta com o jogo extraído (a que tem `exefs` e
-`romfs`, ou um `romfs.bin`). Ele confere se é a **v1.0.0**, copia os arquivos para `extracted/`, gera o código do jogo
+`romfs`, ou um `romfs.bin`). Ele confere se é o Eevee ou o Pikachu (program id), copia os arquivos para `extracted/`, gera o código do jogo
 com o `.venv` e o compila com o clang do MSYS2 (`extracted/lasgame.dll`). É o mesmo fluxo da release, com as
 ferramentas de desenvolvimento no lugar do gerador congelado e do Zig. Depois, clique em **Jogar**.
 
@@ -66,7 +67,9 @@ extracted/
   romfs/      opcional: o RomFS extraído em pastas (útil para mods; o jogo lê o romfs.bin)
 ```
 
-Confira se é a **v1.0.0** (sem atualização aplicada): o código gerado depende do executável exato. `extracted/` está
+O código gerado depende do executável exato: os remendos do gerador (`tools/patches.py`) e os ganchos do runtime só
+são endereços do `main` 1.0.0 (tabela por build: Eevee e Pikachu, `tools/addrmap.py`) e ficam desligados
+para qualquer outro. `extracted/` está
 no `.gitignore` e nunca deve ir para o git.
 
 Traduza o código do jogo para C (o resultado vai para `generated/`, fora do git) e compile. **Sempre com `-j`**: sem
