@@ -19,8 +19,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../hle.h"
+#include "../settings.h"
 
 void rt_register_fnhook(uint64_t addr, int (*fn)(Cpu *c, uint64_t addr));  // runtime/fnhook.c
 void rt_call_original(Cpu *c, uint64_t addr);
@@ -50,8 +52,7 @@ static int g_a6;
 // [[*GOT 0x70015faab8]+0x68] the allocator (both as in the game's call to f_700028ef70).
 static bool g_active;  // a static battle process of ours is alive: the touch that keeps calling the trigger is swallowed
 
-// The touched Pokémon's own battle/capture configuration. f_7000305ad0 gets, in x0, the interface (+0x48) of the capture
-// configuration object (0x2b8 bytes) that f_70003058f0 already built from the wild Pokémon (species, form, level, nature,
+// The touched Pokémon's own battle/capture configuration: the object (0x2b8 bytes) that f_70003058f0 builds from the wild Pokémon (species, form, level, nature,
 // IVs, shiny...); the battle's configuration is the same kind of object, filled by f_70002f60c0 from a table record. So
 // instead of trusting a hand-made record, the trigger keeps a copy of the real configuration and the hook on f_70002f60c0
 // lays it over the record-built one (keeping the word at +0x298, which that function sets to 1 for a static battle).
@@ -59,8 +60,71 @@ static bool g_active;  // a static battle process of ours is alive: the touch th
 #define CFG_SIZE 0x2b8
 #define CONFIG_FROM_RECORD 0x70002f60c0ull  // (x0 = configuration, x1 = record)
 static uint8_t g_cfg[CFG_SIZE] __attribute__((aligned(16)));
-static bool g_cfg_valid, g_usecfg = true;
+static bool g_cfg_valid, g_usecfg;  // (off: copying the builder's configuration crashed; see docs/MODO-BATALHA.md)
 static uint8_t g_rec[0x60] __attribute__((aligned(16)));  // (the synthetic record, below)
+
+#define CONFIG_BUILD 0x70002f65d0ull         // (x0 = configuration object, x1 = allocator, x2 = struct, x8 = out): fills it
+#define WILD_BUILDER_RETURN 0x7000305a98ull  // the return address of its call inside f_70003058f0, the wild Pokémon's builder
+// f_70003058f0 runs in the same update as the trigger, right before it, so the last configuration it built is the touched
+// Pokémon's: keep a copy (the species is the word at +0x58, as in the record-built one).
+// Research (LARECOMP_WILDBATTLE_LOGPOKE=1): the wild builder f_70003058f0 gets x1 -> holder -> P, the Pokémon's own object.
+// Log what the game reads from it (species f_70002185d0, form f_70002186a0, and the raw fields the builder copies), to
+// compare with what the capture screen shows (species name, level).
+#define WILD_BUILDER 0x70003058f0ull
+// What the builder reads from the touched Pokémon's object P (docs/MODO-BATALHA.md): species f_70002185d0(P), form
+// f_70002186a0(P), level = byte P+0xf0c, IVs = six bytes P+0xf18, +0xf1c, ... +0xf2c, gender = word P+0x40c (0 male, 1 female,
+// else none: the builder turns it into 1 / 2 / 0, the record's fixed-gender codes).
+static bool g_wild_valid;
+static uint32_t g_wild_species, g_wild_form, g_wild_level, g_wild_gender;
+static int8_t g_wild_iv[6];
+static bool g_explicit;  // LARECOMP_WILDBATTLE_SPECIES given: that one, whatever was touched
+static bool g_moves_given;  // LARECOMP_WILDBATTLE_MOVES given: those moves, not the level-up ones
+static int logpoke_hook(Cpu *c, uint64_t addr) {
+    (void)addr;
+    uint64_t holder = c->x[1], p = R64(holder, 0);
+    uint64_t save[32], lr = c->x[30], sp = c->sp;
+    memcpy(save, c->x, sizeof save);
+    c->x[0] = p;
+    rt_call_original(c, 0x70002185d0ull);
+    uint64_t species = c->x[0] & 0xffff;
+    c->x[0] = p;
+    rt_call_original(c, 0x70002186a0ull);
+    uint64_t form = c->x[0] & 0xff;
+    memcpy(c->x, save, sizeof save);
+    c->x[30] = lr;
+    c->sp = sp;
+    g_wild_species = (uint32_t)species;
+    g_wild_form = (uint32_t)form;
+    g_wild_level = R8(p, 0xf0c);
+    g_wild_gender = R32(p, 0x40c) == 0 ? 1 : R32(p, 0x40c) == 1 ? 2 : 0;
+    for (int i = 0; i < 6; i++) g_wild_iv[i] = (int8_t)R8(p, 0xf18 + 4 * i);
+    g_wild_valid = true;
+    if (!getenv("LARECOMP_WILDBATTLE_LOGPOKE")) return 0;
+    LOG("[wild] f%llu builder: P %llx species %llu form %llu | +f0c %u +f10 %u +f12 %u | +f18..f2c %d %d %d %d %d %d | +40c %u +410 %u\n",
+        (unsigned long long)renderer_present_count(), (unsigned long long)p, (unsigned long long)species, (unsigned long long)form,
+        R8(p, 0xf0c), (unsigned)(*(volatile uint16_t *)(uintptr_t)(p + 0xf10)), (unsigned)(*(volatile uint16_t *)(uintptr_t)(p + 0xf12)),
+        (int8_t)R8(p, 0xf18), (int8_t)R8(p, 0xf1c), (int8_t)R8(p, 0xf20), (int8_t)R8(p, 0xf24), (int8_t)R8(p, 0xf28), (int8_t)R8(p, 0xf2c),
+        R32(p, 0x40c), R8(p, 0x410));
+    if (atoi(getenv("LARECOMP_WILDBATTLE_LOGPOKE")) >= 2) {   // the whole object, to find where the level lives by comparing with the capture screen (build/poke_<present>.bin)
+        char path[96];
+        snprintf(path, sizeof path, "build/poke_%llu.bin", (unsigned long long)renderer_present_count());
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite((const void *)(uintptr_t)p, 1, 0x1100, f); fclose(f); }
+    }
+    return 0;  // (the builder runs)
+}
+
+static int build_hook(Cpu *c, uint64_t addr) {
+    if (c->x[30] != WILD_BUILDER_RETURN) return 0;  // (another builder: the game's own)
+    uint64_t cfg = c->x[0], lr = c->x[30];
+    rt_call_original(c, addr);
+    c->x[30] = lr;
+    memcpy(g_cfg, (const void *)(uintptr_t)cfg, CFG_SIZE);
+    g_cfg_valid = true;
+    LOG("[wild] f%llu wild Pokémon's configuration %llx kept: species word +0x58 = %u, +0x54 = %u\n",
+        (unsigned long long)renderer_present_count(), (unsigned long long)cfg, *(const uint32_t *)(g_cfg + 0x58), *(const uint32_t *)(g_cfg + 0x54));
+    return 1;
+}
 
 static int config_hook(Cpu *c, uint64_t addr) {
     uint64_t cfg = c->x[0], rec = c->x[1];
@@ -112,10 +176,6 @@ static int trigger_hook(Cpu *c, uint64_t addr) {
     if (g_count >= g_max) return 0;  // (the game's capture runs)
     g_count++;
     if (getenv("LARECOMP_WILDBATTLE_PROBE")) probe_identity(c);
-    if (g_usecfg) {
-        memcpy(g_cfg, (const void *)(uintptr_t)(c->x[0] - 0x48), CFG_SIZE);
-        g_cfg_valid = true;
-    }
     uint64_t lr = c->x[30];
     uint64_t mgr = R64(R64(c->x[1], 0), 0x68);
     uint64_t alloc = R64(R64(R64(GOT_ALLOCATOR, 0), 0), 0x68);
@@ -164,9 +224,9 @@ static DWORD WINAPI debug_thread(LPVOID unused) {
 #define FADE_IN_FN 0x700011ece0ull
 #define FADE_OUT_FN 0x700011ee50ull
 #define GOT_FADE 0x70015facf8ull
-#define FIELD_UPDATE 0x70002f8bb0ull
+#define WORLD_TICK 0x70002f78d0ull  // the world's update, every frame (the parent of f_70002f8bb0, which fps60.c hooks: one hook per address)
 static int g_fade_type = 1, g_fade_seen;
-static bool g_fadein_on;
+static bool g_fadein_on = true;
 static int g_fadein_delay = 30, g_fadein_frames = 10;
 static bool g_fadein_done = true;
 
@@ -245,6 +305,74 @@ static void log_record(const char *what, const uint8_t *r) {
         *(const uint32_t *)(r + 0x3c), *(const uint32_t *)(r + 0x40));
 }
 
+// Level-up moves from the game's own table: bin/archive/waza_oboe.gfpak (a GFLXPACK, docs/MODO-BATALHA.md) holds one file per
+// species (the file's index is the species number): (move u16, level u16) pairs in level order, ended by 0xFFFFFFFF. A wild
+// Pokémon knows the last four it learns up to its level. Read from the romfs image, the pack parsed once (header: u32 files at
+// +0x10, i64 file-table offset at +0x18; 0x18-byte entries: type u8 at +2 (2 = LZ4 block), u32 sizes at +4 / +8, u32 offset at +0x10).
+bool romfs_image_file(const char *path, int *fd, uint64_t *off, uint64_t *size);  // runtime/services/fs.c
+
+static bool lz4_block(const uint8_t *in, size_t n, uint8_t *out, size_t outsz) {
+    size_t i = 0, o = 0;
+    while (i < n) {
+        uint8_t t = in[i++];
+        size_t lit = t >> 4;
+        if (lit == 15) { uint8_t b; do { if (i >= n) return false; b = in[i++]; lit += b; } while (b == 255); }
+        if (i + lit > n || o + lit > outsz) return false;
+        memcpy(out + o, in + i, lit);
+        i += lit, o += lit;
+        if (i >= n) break;
+        if (i + 2 > n) return false;
+        size_t off = in[i] | ((size_t)in[i + 1] << 8), ml = t & 15;
+        i += 2;
+        if (ml == 15) { uint8_t b; do { if (i >= n) return false; b = in[i++]; ml += b; } while (b == 255); }
+        ml += 4;
+        if (!off || off > o || o + ml > outsz) return false;
+        for (size_t k = 0; k < ml; k++, o++) out[o] = out[o - off];
+    }
+    return o == outsz;
+}
+
+static uint8_t *g_pack;
+static size_t g_pack_size;
+static bool g_pack_tried;
+
+static bool learnset_pack(void) {
+    if (g_pack_tried) return g_pack != NULL;
+    g_pack_tried = true;
+    int fd;
+    uint64_t off, size;
+    if (!romfs_image_file("bin/archive/waza_oboe.gfpak", &fd, &off, &size) || size < 0x40 || size > (64u << 20)) return false;
+    uint8_t *b = malloc((size_t)size);
+    if (!b || pread(fd, b, (size_t)size, (off_t)off) != (ssize_t)size) { free(b); return false; }
+    g_pack = b, g_pack_size = (size_t)size;
+    return true;
+}
+
+// The moves a Pokémon of this species and level knows (moves[4], 0 = empty). False: the table wasn't readable.
+static bool learnset_moves(uint32_t species, uint32_t level, int moves[4]) {
+    if (!learnset_pack()) return false;
+    uint32_t nfiles = *(const uint32_t *)(g_pack + 0x10);
+    uint64_t tab = *(const uint64_t *)(g_pack + 0x18);
+    if (species >= nfiles || tab + (uint64_t)0x18 * nfiles > g_pack_size) return false;
+    const uint8_t *e = g_pack + tab + (uint64_t)0x18 * species;
+    uint32_t szd = *(const uint32_t *)(e + 4), szc = *(const uint32_t *)(e + 8), poff = *(const uint32_t *)(e + 0x10);
+    if (e[2] != 2 || szd > 4096 || (uint64_t)poff + szc > g_pack_size) return false;
+    uint8_t buf[4096];
+    if (!lz4_block(g_pack + poff, szc, buf, szd)) return false;
+    int n = 0, learned[64];
+    for (uint32_t i = 0; i + 4 <= szd && n < 64; i += 4) {
+        uint16_t mv = *(const uint16_t *)(buf + i), lv = *(const uint16_t *)(buf + i + 2);
+        if (mv == 0xffff && lv == 0xffff) break;
+        if (lv > level) continue;
+        for (int k = 0; k < n; k++) if (learned[k] == mv) goto have;  // (already known: it keeps its place)
+        learned[n++] = mv;
+    have:;
+    }
+    int first = n > 4 ? n - 4 : 0;
+    for (int k = 0; k < 4; k++) moves[k] = first + k < n ? learned[first + k] : 0;
+    return n > 0;
+}
+
 static int lookup_hook(Cpu *c, uint64_t addr) {
     uint64_t key = R64(c->x[1], 0);
     if (key != WILD_HASH) return 0;  // (a real lookup)
@@ -256,9 +384,19 @@ static int lookup_hook(Cpu *c, uint64_t addr) {
     memcpy(g_rec, (const void *)(uintptr_t)rec, sizeof g_rec);
     log_record("mould (Snorlax)", g_rec);
     *(uint64_t *)g_rec = WILD_HASH;
-    *(uint32_t *)(g_rec + 8) = (uint32_t)g_species;
-    g_rec[0xc] = 0;
-    g_rec[0xd] = (uint8_t)g_level;
+    if (g_wild_valid && !g_explicit) {  // the touched Pokémon's own data
+        *(uint32_t *)(g_rec + 8) = g_wild_species;
+        g_rec[0xc] = (uint8_t)g_wild_form;
+        g_rec[0xd] = (uint8_t)g_wild_level;
+        *(uint32_t *)(g_rec + 0x14) = g_wild_gender;
+        for (int i = 0; i < 6; i++) g_rec[0x48 + i] = (uint8_t)g_wild_iv[i];
+        int mv[4];
+        if (!g_moves_given && learnset_moves(g_wild_species, g_wild_level, mv)) memcpy(g_moves, mv, sizeof mv);
+    } else {
+        *(uint32_t *)(g_rec + 8) = (uint32_t)g_species;
+        g_rec[0xc] = 0;
+        g_rec[0xd] = (uint8_t)g_level;
+    }
     for (int i = 0; i < 4; i++) *(uint32_t *)(g_rec + 0x34 + 4 * i) = (uint32_t)g_moves[i];
     memset(g_rec + 0x54, 0, 5);  // no stat boosts
     log_record("answering with", g_rec);
@@ -278,40 +416,47 @@ static int state_hook(Cpu *c, uint64_t addr) {
     return 0;
 }
 
-__attribute__((constructor)) static void wildbattle_init(void) {
+// Before each boot (runtime/main.c): the launcher's "Wild battles (experimental)" (larecomp.ini wild_battle = 1) turns the
+// mode on when LARECOMP_WILDBATTLE doesn't say otherwise. The research variables (docs/DEPURACAO.md) tune it.
+void wildbattle_configure(void) {
+    static bool hooked;
+    extern void settings_load(void);
+    settings_load();  // (read once; without the launcher it would come later, in boot)
     const char *e = getenv("LARECOMP_WILDBATTLE");
-    if (!e || !*e || *e == '0') return;
-    if (getenv("LARECOMP_WILDBATTLE_SPECIES")) g_species = atoi(getenv("LARECOMP_WILDBATTLE_SPECIES"));
+    bool on = e && *e ? atoi(e) != 0 : g_settings.wild_battle;
+    if (!on || hooked) return;
+    hooked = true;
+    g_max = 1 << 30;  // every touch (the test runs set LARECOMP_WILDBATTLE_MAX)
+    if (getenv("LARECOMP_WILDBATTLE_SPECIES")) { g_species = atoi(getenv("LARECOMP_WILDBATTLE_SPECIES")); g_explicit = true; }
     if (getenv("LARECOMP_WILDBATTLE_LEVEL")) g_level = atoi(getenv("LARECOMP_WILDBATTLE_LEVEL"));
     if (getenv("LARECOMP_WILDBATTLE_MAX")) g_max = atoi(getenv("LARECOMP_WILDBATTLE_MAX"));
     if (getenv("LARECOMP_WILDBATTLE_A6")) g_a6 = atoi(getenv("LARECOMP_WILDBATTLE_A6"));
     if (getenv("LARECOMP_WILDBATTLE_MOVES")) {
+        g_moves_given = true;
         char buf[64];
         snprintf(buf, sizeof buf, "%s", getenv("LARECOMP_WILDBATTLE_MOVES"));
         int n = 0;
         for (char *t = strtok(buf, ","); t && n < 4; t = strtok(NULL, ",")) g_moves[n++] = atoi(t);
         for (; n < 4; n++) g_moves[n] = 0;
     }
+    if (getenv("LARECOMP_WILDBATTLE_FADEIN")) g_fadein_on = atoi(getenv("LARECOMP_WILDBATTLE_FADEIN")) != 0;
+    if (getenv("LARECOMP_WILDBATTLE_FADE_TYPE")) { g_fade_type = atoi(getenv("LARECOMP_WILDBATTLE_FADE_TYPE")); g_fade_seen = 1; }
+    if (getenv("LARECOMP_WILDBATTLE_FADE_DELAY")) g_fadein_delay = atoi(getenv("LARECOMP_WILDBATTLE_FADE_DELAY"));
+    if (getenv("LARECOMP_WILDBATTLE_FADE_FRAMES")) g_fadein_frames = atoi(getenv("LARECOMP_WILDBATTLE_FADE_FRAMES"));
+    if (getenv("LARECOMP_WILDBATTLE_USECFG")) g_usecfg = atoi(getenv("LARECOMP_WILDBATTLE_USECFG")) != 0;
     rt_register_fnhook(ENCOUNTER_TRIGGER, trigger_hook);
     rt_register_fnhook(CLASS_A_DTOR0, dtor_hook);
     rt_register_fnhook(CLASS_A_DTOR1, dtor_hook);
     rt_register_fnhook(FADE_IN_FN, fade_log_hook);
     rt_register_fnhook(FADE_OUT_FN, fade_log_hook);
-    if (getenv("LARECOMP_WILDBATTLE_FADEIN")) {
-        g_fadein_on = atoi(getenv("LARECOMP_WILDBATTLE_FADEIN")) != 0;
-        if (g_fadein_on) rt_register_fnhook(FIELD_UPDATE, field_hook);
-        if (getenv("LARECOMP_WILDBATTLE_FADE_TYPE")) { g_fade_type = atoi(getenv("LARECOMP_WILDBATTLE_FADE_TYPE")); g_fade_seen = 1; }
-        if (getenv("LARECOMP_WILDBATTLE_FADE_DELAY")) g_fadein_delay = atoi(getenv("LARECOMP_WILDBATTLE_FADE_DELAY"));
-        if (getenv("LARECOMP_WILDBATTLE_FADE_FRAMES")) g_fadein_frames = atoi(getenv("LARECOMP_WILDBATTLE_FADE_FRAMES"));
-    }
+    if (g_fadein_on) rt_register_fnhook(WORLD_TICK, field_hook);
     rt_register_fnhook(STATIC_CTOR, ctor_hook);
     rt_register_fnhook(TABLE_LOOKUP, lookup_hook);
-    if (getenv("LARECOMP_WILDBATTLE_USECFG")) g_usecfg = atoi(getenv("LARECOMP_WILDBATTLE_USECFG")) != 0;
-    if (g_usecfg) rt_register_fnhook(CONFIG_FROM_RECORD, config_hook);
+    if (g_usecfg) { rt_register_fnhook(CONFIG_FROM_RECORD, config_hook); rt_register_fnhook(CONFIG_BUILD, build_hook); }
+    rt_register_fnhook(WILD_BUILDER, logpoke_hook);
     if (getenv("LARECOMP_WILDBATTLE_STATE_LOG")) rt_register_fnhook(0x7000289b40ull, state_hook);
 #ifdef _WIN32
     if (getenv("LARECOMP_WILDBATTLE_DEBUG")) CreateThread(NULL, 0, debug_thread, NULL, 0, NULL);
 #endif
-    LOG("[wild] on: species %d level %d moves %d,%d,%d,%d (max %d battle(s))\n", g_species, g_level, g_moves[0], g_moves[1],
-        g_moves[2], g_moves[3], g_max);
+    LOG("[wild] on: the touched Pokémon's own species and level%s (max %d battle(s))\n", g_explicit ? " (a fixed one: LARECOMP_WILDBATTLE_SPECIES)" : "", g_max);
 }

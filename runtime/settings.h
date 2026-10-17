@@ -22,6 +22,7 @@ typedef struct {
     bool movie_audio;
     bool show_fps;
     bool dpad_move;      // the d-pad (and arrow keys) move the player like the stick
+    bool wild_battle;    // touching a wild Pokémon starts a battle, then the capture (runtime/hle/wildbattle.c)
     char game_lang[8];   // the game's language code ("en-US", "es"...: runtime/mods.c game_language)
     char mod[128];       // active mod / fan translation (mods/<name>/), empty = none (runtime/mods.h)
 } Settings;
