@@ -322,6 +322,7 @@ builder as missing: restore it or add the folder as an exception, then select th
 Most internal documentation is in Portuguese.
 - [docs/COMPILAR-WINDOWS.md](docs/COMPILAR-WINDOWS.md): building from source, step by step
 - [docs/PROGRESSO.md](docs/PROGRESSO.md): what works and what is missing
+- [docs/ROADMAP.md](docs/ROADMAP.md): prioritized work and release criteria for a mature port
 - [docs/HISTORICO.md](docs/HISTORICO.md): every problem found, its cause and fix
 - [docs/DEPURACAO.md](docs/DEPURACAO.md): debugging tools and environment variables
 - [docs/DIAGNOSTICO.md](docs/DIAGNOSTICO.md): the game's modules and translator coverage

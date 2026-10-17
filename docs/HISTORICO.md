@@ -200,6 +200,15 @@ comportamento é o do Switch.
 
 ---
 
+## Auditoria de resolução dinâmica (17/10/2026)
+
+| # | Sintoma | Diagnóstico | Causa | Correção | Arquivo |
+|---|---|---|---|---|---|
+| 55 | Resolução dinâmica podia descer mesmo com os 30 fps padrão estáveis | `tools/test_output_scale.c` executou a função real por 180 presents a 33,33 ms: escala 0,70 antes, 1,00 depois; a 45 ms, depois, escala 0,70 | `dyn_update` comparava o tempo entre presents com limiares fixos de 60 Hz (17,4/14,5 ms), enquanto o ritmo padrão é 30 Hz (~33,3 ms) | limiares proporcionais ao ritmo de 30/60 Hz e descarte da janela de amostras quando o ritmo muda; validado em jogo depois, com ini LF (o da auditoria era CRLF e não ligava o modo, ver 56): Eevee a 30 fps, código antigo 1,00 → 0,60, novo 0,95-1,00; modo 60 no mundo a 60,49 fps. Prioridade P3: a opção só existe no ini | `runtime/nvn/output_scale.c`, `tools/test_output_scale.c` |
+| 56 | Valores do `larecomp.ini` editado à mão com CRLF eram ignorados em silêncio (`resolution = dynamic`, `upscaler = bilinear`, `75%`...) | ao validar a auditoria: o jogo recebia `res_mode 0` com `resolution = dynamic` no ini (log temporário em `output_scale`); mesmo forçado a 20 fps, nenhum `[dynres]` | o `fopen` lê em modo binário, então o CR ficava no fim do valor; só `mod` e `game_lang` eram limpos | toda linha perde CR/LF/espaços finais antes do `sscanf`; o mesmo ini CRLF a 20 fps agora reduz a escala (1,00 → 0,70) | `runtime/settings.c` |
+
+---
+
 ## Lições aprendidas
 - **Medir antes de chutar.** Os maiores avanços vieram de instrumentação: dump de threads, motivo dos draws
   pulados, gravação do áudio, log de quem chama cada função.

@@ -2,6 +2,7 @@
 
 Estado atual do port. A história completa, com cada problema e como foi resolvido, está em
 [HISTORICO.md](HISTORICO.md). As ferramentas de diagnóstico estão em [DEPURACAO.md](DEPURACAO.md).
+O backlog priorizado para uma versão madura está em [ROADMAP.md](ROADMAP.md).
 
 _Atualizado em 17/10/2026._
 
@@ -17,7 +18,7 @@ _Atualizado em 17/10/2026._
 | Teclado e mouse | WASD anda / mira, Espaço ou Enter = A, Q ou Backspace = B, Tab = X (menu), R = Y, Z / C = L / R, `=` / `-` = Plus / Minus, setas = d-pad. Mouse: na mira da Poké Ball (depois do "Get ready") ele é preso à janela: movimento = mira (giroscópio virtual), esquerdo = arremessar; fora dela fica livre e o botão esquerdo é um dedo na tela de toque (Brincar com Eevee: acariciar); direito = B sempre. As teclas e a sensibilidade do mouse se trocam no launcher ("Teclado e mouse") |
 | Vídeo de abertura | imagem e áudio corretos, 1080p, termina e segue para o jogo |
 | Áudio | música e efeitos (Opus via `hwopus`), áudio dos vídeos sem cortes |
-| Ritmo | travado em 30 fps (nativo do jogo) |
+| Ritmo | 30 fps travados (o do jogo) por padrão; opção experimental de 60 fps no mundo (item 5) |
 | Introdução | idioma, Professor Carvalho, escolha de personagem, nome digitado corretamente |
 | 3D | cenário correto (quarto, Pallet Town, céu), passes de profundidade/sombra |
 | Personagens e Pokémon | modelos com esqueleto corretos, com animação (correção do `LDC.64` no tradutor de shaders) |
@@ -41,6 +42,9 @@ _Atualizado em 17/10/2026._
    (cache vazio) a área aparece completa depois do carregamento. Qualidade: SMAA ligado, filtro anisotrópico 16x e supersampling bem
    reduzido (1440p / 4K no launcher numa tela menor; 4K roda a ~78 fps sem limite numa RTX 3080). Detalhes em
    [HISTORICO.md, parte 8](HISTORICO.md).
+   Auditoria de 17/10: a resolução dinâmica tratava 30 fps estáveis como lentidão de 60 Hz; o orçamento foi corrigido
+   para 30/60 conforme a cena. Teste isolado e Eevee roteirizado em 30/60 (refeito com ini LF: antes descia a 0,60, agora fica em 0,95-1,00) passaram; a opção só existe no ini (`resolution = dynamic`); coleta opcional de frametimes dá
+   média e P95/P99 ([performance-analysis.md](performance-analysis.md)). Ainda faltam Pikachu, transições e profiling de CPU/GPU.
 5. **60 fps (experimental, opção "60 fps (experimental)" no launcher, desligada por padrão; `fps = 60` no larecomp.ini ou `LARECOMP_FPS60=1`)**: mundo a 60 nativo, menus e Pokédex a 30 com quadro intermediário, batalhas e capturas a 30 (HISTORICO 43-49). Histórico da investigação: a lógica do jogo anda um passo por quadro. Com `LARECOMP_FPS=60` ele chega ao mesmo estado
    no mesmo número de quadro em metade do tempo, ou seja, roda em velocidade dobrada (medido em 15/10/2026 com
    `tools/repro.sh`). 60 fps exigiria mudar o passo de tempo do próprio jogo. O que já se sabe:

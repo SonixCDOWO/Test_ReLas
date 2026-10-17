@@ -193,6 +193,10 @@ a outra metade na captura. **Não implementado.** O que a pesquisa trouxe:
   `SetNumber` de mensagem); ou somar o XP por conta própria depois de achar o campo.
 
 ## Próximas etapas
+_Atualizado em 17/10/2026: os itens 4 e "ligar/desligar no launcher" do 5 foram feitos (Etapa 4 acima, opção
+"Batalhas selvagens (experimental)" desde a 0.2.0, nos dois jogos desde a 0.2.1). Falta o resto do 5 (XP dividido, fuga,
+o Pokémon sumir do mapa) e o 3._
+
 3. Confirmar o caminho alternativo (`289c4c` → `28bda0`, modo 3) e a captura pós-batalha (`319e20` → `31a0e0`) em
    execução: o ideal é um save perto de uma batalha selvagem nativa (lendário ou Snorlax); sem isso, forçar o
    método e observar.
