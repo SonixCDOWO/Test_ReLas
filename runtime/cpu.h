@@ -76,6 +76,21 @@ int rt_fnhook(Cpu *c, uint64_t addr);
 #define ST16(a, v) (*(u16u *)(uintptr_t)(a) = (uint16_t)(v))
 #define ST32(a, v) (*(u32u *)(uintptr_t)(a) = (uint32_t)(v))
 #define ST64(a, v) (*(u64u *)(uintptr_t)(a) = (uint64_t)(v))
+// Research build (gen.py --trace-stores, -DSTORE_TRACE): the generated stores are ST<N>T(<guest pc>, a, v) and report
+// (pc, address, old, new) to the runtime (runtime/storetrace.c); otherwise exactly ST<N>.
+#ifdef STORE_TRACE
+void rt_trace_store(uint64_t pc, uint64_t addr, uint64_t old, uint64_t nw, int size);
+#define ST_TRACED(T, pc, a, v, N) do { T _o = *(T *)(uintptr_t)(a); T _n = (T)(v); *(T *)(uintptr_t)(a) = _n; if (_o != _n) rt_trace_store((pc), (uint64_t)(a), _o, _n, N); } while (0)
+#define ST8T(pc, a, v)  ST_TRACED(uint8_t, pc, a, v, 1)
+#define ST16T(pc, a, v) ST_TRACED(uint16_t, pc, a, v, 2)
+#define ST32T(pc, a, v) ST_TRACED(uint32_t, pc, a, v, 4)
+#define ST64T(pc, a, v) ST_TRACED(uint64_t, pc, a, v, 8)
+#else
+#define ST8T(pc, a, v)  ST8(a, v)
+#define ST16T(pc, a, v) ST16(a, v)
+#define ST32T(pc, a, v) ST32(a, v)
+#define ST64T(pc, a, v) ST64(a, v)
+#endif
 
 // ---- exclusive monitor (emulated with compare-and-swap)
 #define EXCL(N, T)                                                                         \

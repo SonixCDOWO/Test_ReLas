@@ -26,8 +26,9 @@ _Atualizado em 15/10/2026._
 ## O que falta
 1. **Validar o 3D em mais cenas** (batalhas, Pokémon grandes, cidades): a correção dos modelos com esqueleto foi
    validada na Pallet Town. Histórico em [HISTORICO.md, parte 6](HISTORICO.md#parte-6-personagens-explodidos-resolvido).
-2. **Mira por movimento**: feita com o mouse (giroscópio virtual). Falta: giroscópio de controles que têm sensor
-   (DualSense, Pro Controller) (a sensibilidade do mouse já está no launcher).
+2. **Mira por movimento**: mouse (giroscópio virtual) e giroscópio real do controle (SDL, implementado em 16/10/2026,
+   **ainda não testado com um controle de verdade**: sentido dos eixos a confirmar; `LARECOMP_GYRO_PAD_FLIP=1|2|3` inverte
+   yaw/pitch). Sensibilidades no launcher. Falta: correção de deriva do pitch pelo acelerômetro.
 3. **Recursos online** (Pokémon GO, trocas, Poké Ball Plus): desligados de propósito (serviços offline).
 4. **Desempenho** (medido em 15/10/2026, `tools/perf_summary.py` sobre 4 min andando pela Rota 1): 30 fps estáveis
    (mínimo 28,6 por janela de 2 s, nenhum quadro acima de 50 ms fora o print do teste, nenhum underrun de áudio) numa
@@ -49,10 +50,16 @@ _Atualizado em 15/10/2026._
      trocá-lo por 16.666.667 não muda nada.
    - O float 1/30 aparece uma vez (`0x7000f47428`), usado só numa função de interpolação (`0x7000611440`), não no laço.
    - O laço do aplicativo (`0x70000231a0`) chama a atualização (`0x700001d1c0`) e depois o fim de quadro por vtable.
-   - **Não há passo de tempo global.** Varredura da memória no gameplay (dados do `main` e heap, frame 1300) a 30 e a
-     60 fps, endereço a endereço: dos 9.238 floats perto de 1/30 a 30 fps, nenhum vira 1/60 a 60 fps (8.508 ficam
-     idênticos: são dados); os valores perto de 1/60 que só aparecem a 60 fps têm o mesmo conteúdo a 30. O único
-     inteiro perto de 33,3 ms também é fixo e não altera nada. Ou seja, cada sistema avança por quadro.
+   - ~~Não há passo de tempo global~~ (**corrigido em 16/10/2026**: a varredura procurava floats e não achou porque o
+     passo é um inteiro em nanossegundos, numa pilha). Existe uma referência temporal: a tabela de durações `G`
+     (`main+0xf7eeb8`: 16,7 / 33,3 / 50 / 66,7 / 83,3 ms, ponteiro em `0x70015fb438`) e um objeto de temporizadores na
+     pilha da thread principal com dois passos. O passo 1 é reescrito a cada atualização do mundo pelo accessor
+     `f_7000039600` com `G[1]`; o passo 0 fica em 33,3 ms. Os sistemas que usam o **valor** do passo (animações
+     `f_7000663660`/`f_7000664cd0`, `f_700067be50`, `f_70005ed1e8`/`f_70005ed908` e outros) leem o passo 1 e
+     convertem tempo em quadros dividindo por `G[1]`; é por isso que trocar `G[1]` no accessor deixa o mundo certo a
+     60. O que não passa por aí: contadores inteiros de quadro (as linhas do tempo da captura e da batalha) e o
+     passo 0, que só decide se um objeto atualiza ou não. Detalhes e medições: [PESQUISA-60FPS.md](PESQUISA-60FPS.md),
+     "Mapa temporal".
    - Conclusão: 60 fps na velocidade certa não sai de um patch. Os caminhos seriam gerar quadros intermediários
      (interpolação no runtime, sem vetores de movimento do jogo: artefatos, principalmente na interface) ou um
      programa externo de geração de quadros. Pesquisa das técnicas usadas por outros ports: [PESQUISA-60FPS.md](PESQUISA-60FPS.md).

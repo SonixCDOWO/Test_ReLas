@@ -503,12 +503,17 @@ static int ip_on = -1;
 static bool ip_replaying;     // running a recorded frame again for the in-between image
 static uint64_t ip_stats_tagged, ip_stats_untagged;  // draws with / without a game object (CMD_OBJECT)
 static uint64_t ip_draw_sig;  // the current draw's identity (draw_)
+static bool ip_draw_obj;      // ... and whether it belongs to a game object (CMD_OBJECT): only those are blended
+static bool ip_draw_2d;       // ... a 2D draw (no depth test): interface, menus
 static bool ip_enabled(void);
 bool vk_interp_enabled(void) { return ip_enabled(); }  // (cmdbuf.c: hooks the game's object draw functions)
 static bool ip_enabled(void) {
-    // LARECOMP_INTERP (tests) overrides the launcher's 30 / 60 fps choice (larecomp.ini fps)
-    if (ip_on == -1) ip_on = getenv("LARECOMP_INTERP") ? atoi(getenv("LARECOMP_INTERP")) : -2;
-    return ip_on == -2 ? g_settings.fps == 60 : ip_on > 0;
+    // The 60 fps mode (runtime/hle/fps60.c): the world at 60 natively; menus and the Pokédex at the game's 30 with the
+    // in-between image; battles and captures at 30 without it (tried, left out: docs/HISTORICO.md 46).
+    // LARECOMP_INTERP=1 (research): always on.
+    if (ip_on == -1) ip_on = getenv("LARECOMP_INTERP") ? atoi(getenv("LARECOMP_INTERP")) : 0;
+    extern bool fps60_menu(void);
+    return ip_on > 0 || fps60_menu();
 }
 static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size);
 static void ip_note_list(uint64_t handle);
@@ -2007,6 +2012,15 @@ static void draw_(CmdRec *r, bool indexed) {
         if (st.obj) h = (h ^ st.obj) * 0x100000001B3ull, ip_stats_tagged++;
         else ip_stats_untagged++;
         ip_draw_sig = h;
+        // 3D draws (a depth target with the depth test on) are blended, with or without a game object: the ground and the
+        // scenery have none, and they must take the same (blended) light matrices as the shadow map the objects are drawn
+        // into, or shadows slide away from their casters. Interface and full-screen passes don't test depth: frame N.
+        ip_draw_obj = st.rt.depth != NULL && st.ds[0];
+        // In menus (the Pokédex, the bag...) the 2D draws are blended too: lists and panels slide there. A 2D draw takes the
+        // strict jump test in ip_cbuf (a recycled row or glyph moves far: it keeps frame N).
+        ip_draw_2d = !ip_draw_obj;
+        extern bool fps60_menu(void);
+        if (fps60_menu()) ip_draw_obj = true;
     }
     ShaderKey vkey = {0}, fkey = {0};
     vkey.glsl = fkey.glsl = 1;
@@ -3205,7 +3219,7 @@ void backend_execute(uint64_t handle) {
 //    memory (compute, copies to buffers, inline uniform updates, syncs, counters); each constant buffer is the blend of
 //    its two copies, word by word, for normal floats close enough (other words, and draws without a match, keep N);
 //  - a list whose records changed since it ran (the game reused its memory) cancels that frame's in-between image.
-typedef struct { uint64_t key; uint32_t off, size; } IpEntry;
+typedef struct { uint64_t key; uint32_t off, size; uint64_t obj; } IpEntry;  // (obj: the game object of the draw)
 typedef struct {
     IpEntry *e;
     uint32_t n, cap;
@@ -3226,6 +3240,33 @@ static float ip_t = 0.5f;
 static uint32_t ip_occ[IP_TAB];  // occurrences of each base key in this frame / replay (by slot)
 static uint64_t ip_occ_key[IP_TAB];
 static uint64_t ip_stats[4];  // blended, kept (no match), words kept, frames replayed
+// LARECOMP_INTERP_DIAG=1: what the in-between image is made of (docs/PESQUISA-60FPS.md, "Diagnóstico da interpolação")
+typedef struct { int stage, k; uint32_t size; uint64_t draws, nomatch, tagged, words, changed, blended, jumps, nonfloat; } IpDiag;
+static IpDiag ip_diag[96];
+static int ip_ndiag;
+static uint64_t ip_rej[8];  // frames without an in-between image: no previous frame, overflow, destroyed, format, list changed
+static IpDiag *ip_diag_for(int stage, int k, uint32_t size) {
+    for (int i = 0; i < ip_ndiag; i++)
+        if (ip_diag[i].stage == stage && ip_diag[i].k == k && ip_diag[i].size == size) return &ip_diag[i];
+    if (ip_ndiag >= 96) return &ip_diag[95];
+    ip_diag[ip_ndiag] = (IpDiag){.stage = stage, .k = k, .size = size};
+    return &ip_diag[ip_ndiag++];
+}
+static void ip_diag_dump(void) {
+    LOG("[interp-diag] rejected frames: no-prev %llu overflow %llu destroyed %llu format %llu list-changed %llu; replayed %llu\n",
+        (unsigned long long)ip_rej[0], (unsigned long long)ip_rej[1], (unsigned long long)ip_rej[2], (unsigned long long)ip_rej[3],
+        (unsigned long long)ip_rej[4], (unsigned long long)ip_stats[3]);
+    for (int i = 0; i < ip_ndiag; i++) {
+        const IpDiag *d = &ip_diag[i];
+        LOG("[interp-diag] stage %d cbuf %d size %u: binds %llu (tagged %llu, no match %llu) words %llu changed %llu blended %llu jumps %llu nonfloat %llu\n",
+            d->stage, d->k, d->size, (unsigned long long)d->draws, (unsigned long long)d->tagged, (unsigned long long)d->nomatch,
+            (unsigned long long)d->words, (unsigned long long)d->changed, (unsigned long long)d->blended, (unsigned long long)d->jumps,
+            (unsigned long long)d->nonfloat);
+    }
+    memset(ip_diag, 0, sizeof ip_diag);
+    ip_ndiag = 0;
+    memset(ip_rej, 0, sizeof ip_rej);
+}
 
 static uint64_t ip_mix(uint64_t h, uint64_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); return h * 0x100000001B3ull; }
 
@@ -3263,7 +3304,7 @@ static void ip_record(uint64_t key, const void *data, uint32_t size) {
     if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 4096; f->e = realloc(f->e, f->cap * sizeof *f->e); }
     if (f->used + size > f->dcap) { f->dcap = (f->used + size) * 2 + (1 << 20); f->data = realloc(f->data, f->dcap); }
     memcpy(f->data + f->used, data, size);
-    f->e[f->n] = (IpEntry){key, (uint32_t)f->used, size};
+    f->e[f->n] = (IpEntry){key, (uint32_t)f->used, size, st.obj};
     f->used += size;
     uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
     while (f->tab[s]) s = (s + 1) & (IP_TAB - 1);
@@ -3272,30 +3313,81 @@ static void ip_record(uint64_t key, const void *data, uint32_t size) {
 
 // cbuf_info, constant buffers 3+ of the vertex / fragment stage: recording copies them (returns NULL: bind as usual);
 // the replay returns the blended data to bind.
+// Objects whose buffers changed too much between N-1 and N to be blended (vk_interp_render's check, before the replay):
+// a camera cut, a model swapped (another level of detail, another skeleton) or two draws paired wrongly. Blending them
+// mixes unrelated poses - characters stretched across the screen, Pokémon torn apart. They keep frame N's pose.
+#define IP_REJ 1024
+static uint64_t ip_rej_obj[IP_REJ];
+static bool ip_obj_rejected(uint64_t obj) {
+    uint32_t s = (uint32_t)((obj >> 4) * 0x9E3779B1u) & (IP_REJ - 1);
+    while (ip_rej_obj[s]) { if (ip_rej_obj[s] == obj) return true; s = (s + 1) & (IP_REJ - 1); }
+    return false;
+}
 static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
     if (stage > 1) return NULL;
     uint64_t key = ip_key(stage, k);
     if (!ip_replaying) { ip_record(key, (const void *)(uintptr_t)addr, size); return NULL; }
     const IpEntry *n = ip_find(&ipf[ipc], key), *o = ip_find(&ipf[ipc ^ 1], key);
+    static int diag = -1;
+    if (diag < 0) diag = getenv("LARECOMP_INTERP_DIAG") ? 1 : 0;
+    IpDiag *dg = diag ? ip_diag_for(stage, k, size) : NULL;
+    if (dg) { dg->draws++; if (ip_draw_obj) dg->tagged++; if (!o) dg->nomatch++; }
     if (!n) return NULL;
     const uint8_t *nd = ipf[ipc].data + n->off;
+    if (!ip_draw_obj || ip_obj_rejected(st.obj ? st.obj : 1)) { ip_stats[1]++; return nd; }  // interface and other draws no object owns: their order and text change between frames, a blend smears them
     if (!o || o->size != n->size) { ip_stats[1]++; return nd; }
     static uint32_t buf[0x10000 / 4];
     const uint32_t *a = (const uint32_t *)(ipf[ipc ^ 1].data + o->off), *b = (const uint32_t *)nd;
     uint32_t nw = n->size / 4;
+    // A jump anywhere in the buffer (a bone, a matrix row) keeps all of it at N: blending the rest would pull part of a
+    // skeleton or of a matrix halfway and leave the other part, which stretches the model.
     for (uint32_t i = 0; i < nw; i++) {
+        if (a[i] == b[i]) continue;
         uint32_t ea = (a[i] >> 23) & 0xFF, eb = (b[i] >> 23) & 0xFF;
+        if (!ea || !eb || ea == 0xFF || eb == 0xFF) continue;
         float fa, fb;
         memcpy(&fa, &a[i], 4);
         memcpy(&fb, &b[i], 4);
-        // normal floats only (small integers look like denormals, bit masks like NaNs), and no jumps (camera cuts,
-        // wrapping scroll offsets): those keep frame N's value
-        if (a[i] != b[i] && ea && eb && ea != 0xFF && eb != 0xFF && fabsf(fb - fa) <= 0.5f * (fabsf(fa) + fabsf(fb)) + 4.0f) {
-            float v = fa + (fb - fa) * ip_t;
-            memcpy(&buf[i], &v, 4);
+        bool jump = ip_draw_2d ? fabsf(fb - fa) > 0.3f * fmaxf(fabsf(fa), fabsf(fb)) && fabsf(fb - fa) > 0.02f  // (2D: a big move is a recycled row or glyph, not motion)
+                               : fabsf(fb - fa) > 0.5f * (fabsf(fa) + fabsf(fb)) + 4.0f;
+        if (jump) {
+            if (dg) dg->jumps += nw;
+            ip_stats[1]++;
+            return nd;
+        }
+    }
+    // Blended a vec4 at a time, all or nothing: a matrix row with some components blended and others kept (one of them
+    // crossing zero, or an integer in a float's place) is not a transformation any more - it shears and shrinks the model.
+    // Words that are equal need no test; the others must be finite floats (0 counts) without a jump.
+    for (uint32_t g = 0; g < nw; g += 4) {
+        uint32_t m = nw - g < 4 ? nw - g : 4;
+        int bad = 0, changed = 0, jump = 0;
+        for (uint32_t i = g; i < g + m; i++) {
+            if (a[i] == b[i]) continue;
+            changed++;
+            uint32_t ea = (a[i] >> 23) & 0xFF, eb = (b[i] >> 23) & 0xFF;
+            bool fa_ok = ea != 0xFF && (ea || !(a[i] & 0x7FFFFF)), fb_ok = eb != 0xFF && (eb || !(b[i] & 0x7FFFFF));
+            float fa, fb;
+            memcpy(&fa, &a[i], 4);
+            memcpy(&fb, &b[i], 4);
+            if (!fa_ok || !fb_ok) bad++;
+            else if (fabsf(fb - fa) > 0.5f * (fabsf(fa) + fabsf(fb)) + 4.0f) jump++;
+        }
+        if (dg) { dg->words += m; dg->changed += changed; }
+        if (!bad && !jump) {
+            for (uint32_t i = g; i < g + m; i++) {
+                if (a[i] == b[i]) { buf[i] = b[i]; continue; }
+                float fa, fb, v;
+                memcpy(&fa, &a[i], 4);
+                memcpy(&fb, &b[i], 4);
+                v = fa + (fb - fa) * ip_t;
+                memcpy(&buf[i], &v, 4);
+            }
+            if (dg) dg->blended += changed;
         } else {
-            buf[i] = b[i];
-            if (a[i] != b[i]) ip_stats[2]++;
+            for (uint32_t i = g; i < g + m; i++) buf[i] = b[i];
+            ip_stats[2] += changed;
+            if (dg) { dg->jumps += jump ? changed : 0; dg->nonfloat += bad ? changed : 0; }
         }
     }
     if (n->size > nw * 4) memcpy((uint8_t *)buf + nw * 4, nd + nw * 4, n->size - nw * 4);
@@ -3368,8 +3460,65 @@ bool vk_interp_render(TexBackend *b, TexBackend **hold) {
     IpFrame *cur = &ipf[ipc], *prev = &ipf[ipc ^ 1];
     bool ok = prev->valid && cur->valid && cur->nlists > 0 && !cur->overflow && !prev->overflow && b && b->image &&
               b->aspect == VK_IMAGE_ASPECT_COLOR_BIT && b->samples <= 1 && cur->destroyed == g_nvn_destroyed;
+    bool structural = ok;
     for (int i = 0; ok && i < cur->nlists; i++)
         if (!cur->hashes[i] || ip_list_hash(cur->lists[i], 0) != cur->hashes[i]) ok = false;
+    if (!ok) {
+        if (!prev->valid || !cur->valid || cur->nlists == 0) ip_rej[0]++;
+        else if (cur->overflow || prev->overflow) ip_rej[1]++;
+        else if (cur->destroyed != g_nvn_destroyed) ip_rej[2]++;
+        else if (!structural) ip_rej[3]++;
+        else ip_rej[4]++;
+    }
+    if (ok) {
+        // Per object, before the replay: the share of its changed float words that changed by a large step. Above
+        // LARECOMP_INTERP_OBJ_LIMIT (0.2) the object is not blended (ip_obj_rejected); when the rejected objects hold
+        // most of the frame's changes (a camera cut), there is no in-between image at all.
+        typedef struct { uint64_t obj, changed, big; } ObjAcc;
+        static ObjAcc acc[IP_REJ];
+        memset(acc, 0, sizeof acc);
+        memset(ip_rej_obj, 0, sizeof ip_rej_obj);
+        uint64_t changed = 0, big = 0, rej_changed = 0;
+        int nrej = 0, nobj = 0;
+        for (uint32_t i = 0; i < cur->n; i++) {
+            const IpEntry *n = &cur->e[i], *o = ip_find(prev, n->key);
+            if (!o || o->size != n->size) continue;
+            uint64_t gobj = n->obj ? n->obj : 1;  // (draws without an object: one group)
+            const float *fa = (const float *)(prev->data + o->off), *fb = (const float *)(cur->data + n->off);
+            uint64_t c = 0, bg = 0;
+            for (uint32_t w = 0; w < n->size / 4; w++) {
+                float a = fa[w], v = fb[w];
+                if (a == v || !isfinite(a) || !isfinite(v)) continue;
+                float m = fmaxf(fabsf(a), fabsf(v));
+                if (m < 1e-3f || m > 1e7f) continue;
+                c++;
+                if (fabsf(v - a) > 0.3f * m && fabsf(v - a) > 0.1f) bg++;
+            }
+            if (!c) continue;
+            uint32_t sl = (uint32_t)((gobj >> 4) * 0x9E3779B1u) & (IP_REJ - 1);
+            while (acc[sl].obj && acc[sl].obj != gobj) sl = (sl + 1) & (IP_REJ - 1);
+            if (!acc[sl].obj) { acc[sl].obj = gobj; nobj++; }
+            acc[sl].changed += c, acc[sl].big += bg;
+            changed += c, big += bg;
+        }
+        extern bool fps60_menu(void);
+        bool menu = fps60_menu();  // (menus: the cut checks are for battles; a menu screen changes by large steps all the time)
+        static double obj_limit = -1;
+        if (obj_limit < 0) obj_limit = getenv("LARECOMP_INTERP_OBJ_LIMIT") ? atof(getenv("LARECOMP_INTERP_OBJ_LIMIT")) : 0.2;
+        for (int i = 0; i < IP_REJ; i++)
+            if (!menu && acc[i].obj && acc[i].changed >= 8 && (double)acc[i].big > obj_limit * (double)acc[i].changed) {
+                uint32_t sl = (uint32_t)((acc[i].obj >> 4) * 0x9E3779B1u) & (IP_REJ - 1);
+                while (ip_rej_obj[sl]) sl = (sl + 1) & (IP_REJ - 1);
+                ip_rej_obj[sl] = acc[i].obj;
+                nrej++;
+                rej_changed += acc[i].changed;
+            }
+        if (getenv("LARECOMP_INTERP_DIAG"))
+            LOG("[interp-cut] present %llu: objects %d rejected %d (%llu of %llu changed words; big %llu)\n",
+                (unsigned long long)renderer_present_count(), nobj, nrej, (unsigned long long)rej_changed, (unsigned long long)changed,
+                (unsigned long long)big);
+        if (!menu && changed && rej_changed * 10 > changed * 6) { ok = false; ip_rej[5]++; }
+    }
     if (ok) {
         vk_end_pass();
         *hold = ip_hold_copy(b);
@@ -3388,6 +3537,7 @@ bool vk_interp_render(TexBackend *b, TexBackend **hold) {
             LOG("[interp] frame %llu: %llu blended, %llu without a match, %llu words kept (replays %llu)\n",
                 (unsigned long long)vk_frame_counter(), (unsigned long long)ip_stats[0], (unsigned long long)ip_stats[1],
                 (unsigned long long)ip_stats[2], (unsigned long long)ip_stats[3]);
+        if (ip_stats[3] % 300 == 0 && getenv("LARECOMP_INTERP_DIAG")) ip_diag_dump();
         if (ip_stats[3] % 300 == 1)
             LOG("[interp] draws with an object %llu, without %llu\n", (unsigned long long)ip_stats_tagged, (unsigned long long)ip_stats_untagged);
     }

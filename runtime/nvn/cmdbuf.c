@@ -108,8 +108,9 @@ NVN(nvnCommandBufferBeginRecording) {
     static bool hooked;  // (hooks cost every game function a lookup: only with interpolation on)
     if (!hooked) {
         hooked = true;
-        extern bool vk_interp_enabled(void);
-        if (vk_interp_enabled() && !getenv("LARECOMP_INTERP_NOOBJ"))  // (NOOBJ: pair by order, the old prototype)
+        extern bool vk_interp_enabled(void), fps60_enabled(void);
+        // (the 60 fps mode turns interpolation on only inside battles and captures: hooked from the start all the same)
+        if ((vk_interp_enabled() || fps60_enabled()) && !getenv("LARECOMP_INTERP_NOOBJ"))  // (NOOBJ: pair by order, the old prototype)
             for (size_t i = 0; i < sizeof k_obj_fns / sizeof k_obj_fns[0]; i++) rt_register_fnhook(k_obj_fns[i], obj_hook);
     }
     NvnCmdBuf *cb = cb_of(A(0));

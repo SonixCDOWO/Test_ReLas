@@ -93,6 +93,13 @@ GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(B)/lasrecomp.dll.a
 GAMELIB_SHARED := -shared  # (+ the import library: runtime/gamebuild.c)
 endif
 
+# Research build (docs/DEPURACAO.md, LARECOMP_TRACE_STORES): make TRACE=1 B=build/trace GEN=generated-trace gen / -j20 all.
+# Every store of the game reports its instruction to runtime/storetrace.c.
+ifdef TRACE
+GENFLAGS += -DSTORE_TRACE
+GENTRACE := --trace-stores
+endif
+
 # GAMELIB_ID: what the game code library is built from (the generator, the headers it is compiled against, the
 # flags). A library with another id is rebuilt by the start screen, never loaded.
 GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools/passes.py tools/patches.py \
@@ -167,10 +174,10 @@ $(B)/imgui/imgui_impl_%.o: $(IMGUI)/backends/imgui_impl_%.cpp
 PY := $(firstword $(wildcard .venv/Scripts/python.exe) $(wildcard .venv/bin/python) $(wildcard tools/venv/bin/python) $(wildcard tools/venv/Scripts/python.exe))
 
 gen:
-	cd tools && $(abspath $(PY)) gen.py sdk ../extracted/exefs/sdk 0x7004000000 ../$(GEN)/sdk --hle ../runtime/hle/hle_symbols.txt $(GENSIMD)
-	cd tools && $(abspath $(PY)) gen.py main ../extracted/exefs/main 0x7000000000 ../$(GEN)/main $(GENSIMD)
-	cd tools && $(abspath $(PY)) gen.py subsdk0 ../extracted/exefs/subsdk0 0x7006000000 ../$(GEN)/subsdk0 $(GENSIMD)
-	cd tools && $(abspath $(PY)) gen.py subsdk1 ../extracted/exefs/subsdk1 0x7008000000 ../$(GEN)/subsdk1 $(GENSIMD)
+	cd tools && $(abspath $(PY)) gen.py sdk ../extracted/exefs/sdk 0x7004000000 ../$(GEN)/sdk --hle ../runtime/hle/hle_symbols.txt $(GENSIMD) $(GENTRACE)
+	cd tools && $(abspath $(PY)) gen.py main ../extracted/exefs/main 0x7000000000 ../$(GEN)/main $(GENSIMD) $(GENTRACE)
+	cd tools && $(abspath $(PY)) gen.py subsdk0 ../extracted/exefs/subsdk0 0x7006000000 ../$(GEN)/subsdk0 $(GENSIMD) $(GENTRACE)
+	cd tools && $(abspath $(PY)) gen.py subsdk1 ../extracted/exefs/subsdk1 0x7008000000 ../$(GEN)/subsdk1 $(GENSIMD) $(GENTRACE)
 
 gen-objs: $(GEN_OBJ)
 

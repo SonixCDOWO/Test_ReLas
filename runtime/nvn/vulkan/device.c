@@ -499,6 +499,11 @@ void backend_present(NvnTexture *t) {
     static uint64_t last_present, period = 33333333;
     if (last_present && t0 - last_present > 5000000 && t0 - last_present < 100000000) period = (period * 7 + (t0 - last_present)) / 8;
     last_present = t0;
+    {   // 60 fps mode: a menu's frames come every 33.3 ms, but the smoothed period still holds the world's 16.7 ms for its
+        // first frames - the second image would come too early
+        extern bool fps60_menu(void);
+        if (fps60_menu()) period = 33333333;
+    }
     for (int image = two ? 0 : 1; image < 2; image++) {
     bool final = image == 1;
     if (final && two) {
@@ -542,7 +547,26 @@ void backend_present(NvnTexture *t) {
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
         // (the in-between image: build/window_mid.png, with interpolation on)
         bool shot = win_shot && (long)total_frames + 1 == win_shot;
-        vk_frame_end(shot ? (final ? "build/window.png" : "build/window_mid.png") : NULL);
+        // LARECOMP_WINDOW_SHOTS=<n>,<n>,...: the in-between image and the frame of each, build/frames/{mid,fin}_<n>.png
+        static long list[512]; static int nlist = -1;
+        if (nlist < 0) {
+            nlist = 0;
+            const char *e = getenv("LARECOMP_WINDOW_SHOTS");
+            for (; e && *e && nlist < 512; nlist++) { list[nlist] = atol(e); e = strchr(e, ','); if (!e) { nlist++; break; } e++; }
+        }
+        static char lpath[96];
+        extern long fps60_scene_start(void);
+        static bool rel_list = false;
+        { static bool init; if (!init) { init = true; rel_list = getenv("LARECOMP_WINDOW_SHOTS_REL") != NULL; } }
+        const char *path = shot ? (final ? "build/window.png" : "build/window_mid.png") : NULL;
+        for (int i = 0; i < nlist; i++)
+            if (rel_list ? (fps60_scene_start() >= 0 && (long)total_frames + 1 - fps60_scene_start() == list[i])
+                         : (long)total_frames + 1 == list[i]) {
+                mkdir("build/frames", 0755);
+                snprintf(lpath, sizeof lpath, "build/frames/%s_%ld.png", final ? "fin" : "mid", list[i]);
+                path = lpath;
+            }
+        vk_frame_end(path);
         if (final && shot && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else {
         renderer_submit();

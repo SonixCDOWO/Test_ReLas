@@ -5,6 +5,7 @@ either re-emitted as inline assembly (simd='asm', AArch64 hosts), with guest V r
 loaded from / stored to the Cpu struct around each batch, so their semantics are
 bit-exact by construction, or lowered to portable C (simd='c', tools/simd_c.py + runtime/simd.h).
 """
+import re
 import struct
 
 # Cpu struct offsets (must match runtime/cpu.h)
@@ -168,7 +169,8 @@ def is_ldst(w):
 
 
 class Lifter:
-    def __init__(self, base, simd='asm'):
+    def __init__(self, base, simd='asm', trace_stores=False):
+        self.trace_stores = trace_stores  # research build: every store reports its instruction (runtime/storetrace.c)
         self.base = base  # absolute load address of the module (guest == host)
         if simd not in ('asm', 'c'):
             raise ValueError(f'simd={simd!r}')
@@ -360,6 +362,12 @@ class Lifter:
     # ------------------------------------------------------------ loads / stores
 
     def ldst(self, w, pc):
+        r = self._ldst(w, pc)
+        if self.trace_stores and r.kind == 'op' and r.code and 'ST' in r.code:
+            r.code = re.sub(r'ST(8|16|32|64)[(]', lambda m: 'ST%sT(%s, ' % (m.group(1), hx(pc)), r.code)
+        return r
+
+    def _ldst(self, w, pc):
         V = bits(w, 26, 1)
         if V:
             if self.sc:

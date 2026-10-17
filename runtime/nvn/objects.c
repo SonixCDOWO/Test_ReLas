@@ -675,6 +675,8 @@ static void present_pace(int interval) {
     next += period;
 }
 
+static int g_last_interval;
+int rt_present_interval(void) { return g_last_interval; }
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
@@ -691,6 +693,7 @@ NVN(nvnQueuePresentTexture) {
             p = *end == ';' ? end + 1 : end;
         }
     }
+    g_last_interval = w->interval;
     { extern void fps60_present(void); fps60_present(); }
     present_pace(w->interval);
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));

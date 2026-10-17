@@ -38,7 +38,7 @@ def sanitize(sym):
 
 
 class Module:
-    def __init__(self, name, path, base, simd='asm'):
+    def __init__(self, name, path, base, simd='asm', trace_stores=False):
         self.name = name
         self.nso = Nso(path)
         self.base = base
@@ -46,7 +46,7 @@ class Module:
         self.lo = base + n.text[0]
         self.hi = base + n.text[0] + n.text[1]
         self.words = struct.unpack(f'<{n.text[1] // 4}I', bytes(n.image[n.text[0]:n.text[0] + n.text[1]]))
-        self.lifter = Lifter(base, simd)
+        self.lifter = Lifter(base, simd, trace_stores)
         self.cache = {}
         self.stats = Counter()
         self.mu = None
@@ -500,12 +500,13 @@ def main():
     ap.add_argument('--chunk-bytes', type=int, default=1500000)  # and about this much C (even compile times)
     ap.add_argument('--big-fn', type=int, default=100000)  # bytes of C from which a function gets its own file
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--trace-stores', action='store_true')  # research build (docs/DEPURACAO.md, LARECOMP_TRACE_STORES)
     ap.add_argument('--simd', choices=('asm', 'c'),
                     default='asm' if platform.machine().lower() in ('arm64', 'aarch64') else 'c')
     args = ap.parse_args()
 
     t0 = time.time()
-    m = Module(args.name, args.nso, args.base, args.simd)
+    m = Module(args.name, args.nso, args.base, args.simd, args.trace_stores)
     starts = m.boundaries()
     hle = {}
     if args.hle and os.path.exists(args.hle):

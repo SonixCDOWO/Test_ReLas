@@ -19,6 +19,10 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `TURBO=0 tools/repro.sh ...` | o `repro.sh` roda em turbo por padrão (`LARECOMP_FPS=0`, ~4x mais rápido: os quadros são os mesmos, só animações de espera ligadas ao tempo real mudam de fase); `TURBO=0` volta ao ritmo real, para medir fps ou áudio |
 | `LARECOMP_DRAW_CHAINS=<quadro>[-<último>]` | registra cada draw, gravação de lista (`begin`) e chamada de lista (`call`) nesses quadros, com a cadeia de funções do jogo (`[chain]`) |
 | `LARECOMP_HOOK_DUMP_FRAMES=<primeiro>-<último>` | limita o `LARECOMP_HOOK_DUMP` a esses quadros |
+| `LARECOMP_ELAPSED_LOG="<função>:<passo>,..."` (+ `LARECOMP_TIME_PROBE_FRAMES=<de>-<até>`) | o passo de tempo (ns) que cada função recebe do objeto de temporizadores, com o objeto e o getter (docs/PESQUISA-60FPS.md, "Mapa temporal") |
+| `LARECOMP_TIMER_USERS=<de>-<até>` | quem lê cada passo de tempo (chamadas ao getter `f_70000395f0` por endereço de retorno), listado no último quadro |
+| `tools/teste60.sh <captura\|batalha> <0\|1\|2>` | a mesma cena a 30 fps e num modo 60, com imagens no mesmo tempo de jogo (`build/teste60/<cena>-<modo>/sheet.png`) |
+| Atenção | o `fnhook` guarda **um gancho por endereço**: o último registrado vale; duas sondas na mesma função se anulam |
 | `LARECOMP_DAYS_AHEAD=<n>` | relógio n dias à frente (coisas diárias: a fome do parceiro, que precisa ser maior que zero para ele comer) |
 | `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
 | `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |
