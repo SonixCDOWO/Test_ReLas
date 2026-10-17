@@ -76,6 +76,45 @@ Quem identifica a espécie/nível do Pokémon tocado ainda não foi lido.
   `build/lasgame.dll.id`** (sem o `.id` o runtime recusa a DLL: "built for another version") e compile só o runtime
   (`make -j20 build/lasrecomp.exe`).
 
+## Etapa 3b (17/10/2026): o que a comunidade já tem, e a tabela das batalhas "estáticas"
+**Comunidade** (pesquisa em 17/10/2026): o [pkNX](https://github.com/kwsch/pkNX) edita o Let's Go por **dados do
+romfs** (caminhos em `pkNX.Game/File/GameFileMapping.cs`, `FilesGG`): encontros estáticos
+(`bin/script_event_data/event_encount.bin`), presentes (`add_poke.bin`), trocas (`field_trade_data.bin`), tabelas
+de selvagens (`bin/field/param/encount/encount_data_{p,e}.bin`, FlatBuffers `wild.fbs`), treinadores
+(`bin/trainer/trainer_{data,poke,type}`). Taxa de shiny, TMs e tabela de tipos ficam no `main` e o pkNX os acha por
+padrão de bytes e os altera (`EditorGG.cs`). O mod de dados [Peerless Pikachu & Exquisite Eevee PLUS](https://www.pokecommunity.com/threads/pok%C3%A9mon-lets-go-peerless-pikachu-exquisite-eevee-plus.541476/)
+(feito com pkNX) mexe em selvagens, estáticos e treinadores, mas na [discussão do lançamento](https://reddit.sentinel-team.org/posts/1rr2xif/snapshots/2026-03-13T05%3A19%3A13.96841Z)
+um comentário diz que ninguém achou como pôr batalhas selvagens comuns, e vários pedem isso. Ou seja: **editar a tabela
+dos estáticos é conhecido; transformar um selvagem comum em batalha ninguém fez** (e nada nas fontes diz que seja
+impossível).
+
+**A tabela das batalhas estáticas, no nosso romfs** (`extracted/romfs/bin/script_event_data/event_encount.bin`, 10
+registros de 0x40 bytes; layout `EncounterStatic7b` do pkNX: `+0` hash u64, `+8` espécie u16, `+0xA` forma, `+0xB`
+nível, `+0xC` shiny, `+0xD` gênero, `+0xE` natureza (25 = aleatória), `+0xF` habilidade, `+0x20` 4 golpes u16, `+0x2C`
+IVs, `+0x32` EVs, `+0x38` aumentos de status, `+0x10..0x1F` ponteiros de texto):
+| # | Pokémon | Nível |
+|---|---|---|
+| 0 / 1 | Pikachu (forma 8) / Eevee (forma 1) iniciais | 5 |
+| 2 / 3 / 4 | Articuno / Zapdos / Moltres | 50 (+1 em todos os status) |
+| 5 | Mewtwo | 70 (+1 em todos) |
+| 6 / 7 | Snorlax (dois, +1 Atk / +1 Def) | 34 |
+| 8 / 9 | Voltorb / Electrode | 42 |
+Cada batalha é achada por um **hash u64** que vem do script do evento. Isto é o "pedido de batalha selvagem" que
+procurávamos: a espécie, o nível, o gênero, a natureza, os IVs e os golpes de um selvagem cabem num registro assim.
+
+Pistas no `main` (tabela de strings perto de `image+0xf04100`): nomes de cenários `sinario_densetu_mae` e
+`sinario_densetu_hokaku` (densetsu = lenda, hokaku = captura) ao lado dos três caminhos de arquivo acima. O código não
+referencia os nomes por `adrp`+`add` nem por ponteiro direto (a busca não achou nada), então o carregador usa índices.
+
+**Plano revisado do protótipo**: em vez de montar o pedido de batalha do zero, reaproveitar o comando de script das
+batalhas estáticas com um **registro sintético** (copiar o do Snorlax e preencher espécie, forma, nível, gênero,
+natureza, IVs e shiny do Pokémon tocado; os golpes vêm da tabela de aprendizado pelo nível). Falta achar: o carregador
+da tabela (a tabela fica em memória depois de lida: dá para achar o endereço varrendo o heap pelo hash do Snorlax
+`343e35139d576e27`) e o comando de script que recebe o hash. Outro caminho já provado pela comunidade: cheats e mods
+de "teletransporte" e de "lendário aparecer" mexem em posição e em flags (`bin/flagwork`); como a memória do guest é
+memória do host, o runtime pode fazer o mesmo para **chegar a uma batalha nativa de Snorlax/lendário** e observar o
+fluxo de verdade, sem save adiantado.
+
 ## Próximas etapas
 3. Confirmar o caminho alternativo (`289c4c` → `28bda0`, modo 3) e a captura pós-batalha (`319e20` → `31a0e0`) em
    execução: o ideal é um save perto de uma batalha selvagem nativa (lendário ou Snorlax); sem isso, forçar o
