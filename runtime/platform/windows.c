@@ -117,6 +117,14 @@ static void log_to_file_without_console(void) {
     if (slash) slash[1] = 0;
     snprintf(g_log_path, sizeof g_log_path, "%slasrecomp.log", exe);
     bool append = getenv("LASRECOMP_LOG_APPEND") != NULL;
+    if (!append) {
+        // Keep the previous run around for crash reports: a fresh launch moves it aside first
+        // (a crash log would otherwise be lost the moment the game is started again).
+        char prev[MAX_PATH];
+        snprintf(prev, sizeof prev, "%slasrecomp-prev.log", exe);
+        DeleteFileA(prev);
+        MoveFileA(g_log_path, prev);
+    }
     if (!freopen(g_log_path, append ? "ab" : "wb", stderr)) { g_log_path[0] = 0; return; }
     setvbuf(stderr, NULL, _IONBF, 0);
     _dup2(_fileno(stderr), _fileno(stdout));

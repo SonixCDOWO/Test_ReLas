@@ -89,6 +89,12 @@ static void log_to_file_without_terminal(void) {
     mkdir(dir, 0755);
     snprintf(g_log_path, sizeof g_log_path, "%s/lasrecomp.log", dir);
     bool append = getenv("LASRECOMP_LOG_APPEND") != NULL;
+    if (!append) {
+        // Keep the previous run around for crash reports (see the Windows branch).
+        char prev[1024];
+        snprintf(prev, sizeof prev, "%s/lasrecomp-prev.log", dir);
+        rename(g_log_path, prev);
+    }
     if (!freopen(g_log_path, append ? "a" : "w", stderr)) { g_log_path[0] = 0; return; }
     dup2(STDERR_FILENO, STDOUT_FILENO);
     setenv("LASRECOMP_LOG_APPEND", "1", 1);

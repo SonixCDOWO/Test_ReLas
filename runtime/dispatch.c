@@ -65,6 +65,27 @@ void hle_override(uint64_t addr, HostFn fn, const char *name) {
     override_count++;
 }
 
+// ---- recent-HLE ring (crash debugging: what the game asked the host just before dying)
+#define HHIST 128
+static __thread struct { const char *name; uint64_t x0, x1, x30; } hhist[HHIST];
+static __thread int hhist_n;
+static void hhist_push(const char *name, Cpu *c) {
+    int i = hhist_n++ & (HHIST - 1);
+    hhist[i].name = name;
+    hhist[i].x0 = c->x[0];
+    hhist[i].x1 = c->x[1];
+    hhist[i].x30 = c->x[30];
+}
+static void hhist_dump(void) {
+    int n = hhist_n < HHIST ? hhist_n : HHIST, start = hhist_n - n;
+    fprintf(stderr, "last %d host calls:\n", n);
+    for (int k = 0; k < n; k++) {
+        int i = (start + k) & (HHIST - 1);
+        fprintf(stderr, "  %s x0=%llx x1=%llx lr=%llx\n", hhist[i].name ? hhist[i].name : "?",
+                (unsigned long long)hhist[i].x0, (unsigned long long)hhist[i].x1, (unsigned long long)hhist[i].x30);
+    }
+}
+
 static __thread uint64_t unimpl_pc;
 static int unimpl_counts[MAX_HLE];
 static void hle_unimplemented(Cpu *c) {
@@ -141,6 +162,7 @@ static GuestFn dispatch_slow(Cpu *c) {
         rt_unwind_point();  // (HLE calls aren't cached below, so every one passes here: a reboot's safe point)
         int i = (int)((pc - HLE_BASE) / 16);
         if (i < hle_count) {
+            hhist_push(hle_slots[i].name, c);
             if (hle_slots[i].fn) return hle_slots[i].fn;
             unimpl_pc = pc;
             return hle_unimplemented;
@@ -216,6 +238,7 @@ static const char *host_sym(uint64_t pc, uint64_t *offset) {
 }
 
 void rt_fatal_trace(void) {
+    hhist_dump();
     fprintf(stderr, "host backtrace (guest functions are f_<addr>):\n");
     plat_print_backtrace();
     Cpu *c = kernel_current_cpu();
