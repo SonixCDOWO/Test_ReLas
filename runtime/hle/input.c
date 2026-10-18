@@ -471,7 +471,13 @@ void input_frame(uint64_t frame) {
         long wb = fps60_world_back();
         if (wb >= 0 && (long)real_frame >= wb && (long)real_frame - wb < 300) b = 0, lx = ly = rx = ry = 0;
         extern bool fps60_in_scene(void);  // (inside the encounter: run away)
-        if (fps60_in_scene()) {  // the encounter menu (Get ready / Bag / Help / Run away): B back to it, down three, A;
+        static int catch_ = -1;  // LARECOMP_INPUT_LOOP_CATCH=1: A every 40 frames instead (get ready, throw, the screens
+        if (catch_ < 0) catch_ = getenv("LARECOMP_INPUT_LOOP_CATCH") ? atoi(getenv("LARECOMP_INPUT_LOOP_CATCH")) : 0;
+        // after a catch: experience, Pokédex): what a player does, more textures replaced than running away
+        if (fps60_in_scene() && catch_) {
+            lx = ly = rx = ry = 0;
+            b = real_frame % 40 < 6 ? 1ull : 0;
+        } else if (fps60_in_scene()) {  // the encounter menu (Get ready / Bag / Help / Run away): B back to it, down three, A;
             // "give up catching?" may start on No: up, A
             uint64_t ph = real_frame % 80;
             lx = ly = rx = ry = 0;

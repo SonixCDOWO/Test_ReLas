@@ -1,10 +1,10 @@
 """capture_loop.py: unattended captures in the grass, to reproduce what breaks the world after a capture (HISTORICO 60).
 
-  capture_loop.py run <name> [--game eevee|pikachu] [--frames N] [--save <savedata.bin>] [--fps 60|30] [--turbo 0|1]
+  capture_loop.py run <name> [--game eevee|pikachu] [--frames N] [--save <savedata.bin>] [--fps 60|30] [--turbo 0|1] [--leg <frames>]
                   [VAR=value ...]          one session: walks back and forth in the grass, looped; inside an encounter
                                            input.c presses B to run away; (LARECOMP_INPUT_LOOP); after each battle /
                                            capture it holds still for 300 frames (input.c) so the view can be compared
-                                           with the one before the encounter
+                                           with the one before the encounter; EXE=<path> runs another build
   capture_loop.py scan <name>              per encounter: the frame before it against the frame after the world is back
                                            (luma, 4 px tolerance: % of pixels off by > 24) and build/capture_loop/<name>/
                                            pairs_NN.png (before | after, 4 encounters per image) to look at
@@ -29,25 +29,26 @@ from bateria_scan import load, luma, novelty, W, H  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, 'build', 'capture_loop')
 BASE = '400:A:6,500:A:6,1150:A:6,1300:A:6'  # controller screen, title, continue
-LOOP_START, PERIOD = 1500, 960
+LOOP_START = 1500
 
 
-def script():
+def script(leg=80):
     e = [BASE]
     t = LOOP_START
-    for k in range(6):  # back and forth in six directions (returns to the start: stays in the same grass)
+    for k in range(6):  # back and forth in six directions (returns to the start; --leg 300 walks across areas)
         a = (k * 60 + 30) % 360
-        e.append(f'{t}:STICK_{a}:80'); t += 80
-        e.append(f'{t}:STICK_{(a + 180) % 360}:80'); t += 80
+        e.append(f'{t}:STICK_{a}:{leg}'); t += leg
+        e.append(f'{t}:STICK_{(a + 180) % 360}:{leg}'); t += leg
     # (no A: it talks to the partner Pokemon; inside an encounter input.c presses B to run away, no capture needed)
     return ','.join(e)
 
 
-def run(name, game, frames, save, fps, turbo, extra):
+def run(name, game, frames, save, fps, turbo, extra, leg=80):
     out = os.path.join(OUT, name)
     os.makedirs(os.path.join(out, 'save', 'save_0'), exist_ok=True)
     with open(save, 'rb') as f, open(os.path.join(out, 'save', 'save_0', 'savedata.bin'), 'wb') as g:
         g.write(f.read())
+    exe = extra.pop('EXE', os.path.join(ROOT, 'build', 'lasrecomp.exe'))  # (EXE=: another build or a copy under its own name)
     ini_keys = {k: v for k, v in extra.items() if not k.startswith('LARECOMP_')}
     env_keys = {k: v for k, v in extra.items() if k.startswith('LARECOMP_')}
     ini = os.path.join(out, 'larecomp.ini')
@@ -58,7 +59,7 @@ def run(name, game, frames, save, fps, turbo, extra):
     raw, log = os.path.join(out, 'frames.raw'), os.path.join(out, 'log.txt')
     env = dict(os.environ, LARECOMP_NO_AUDIO='1', LARECOMP_NO_USER_INPUT='1', LARECOMP_NO_LAUNCHER='1',
                LARECOMP_SAVE_DIR=os.path.join(out, 'save'), LARECOMP_SETTINGS=ini, LARECOMP_SCALE='0.5',
-               LARECOMP_INPUT=script(), LARECOMP_INPUT_LOOP=f'{LOOP_START}:{PERIOD}',
+               LARECOMP_INPUT=script(leg), LARECOMP_INPUT_LOOP=f'{LOOP_START}:{12 * leg}',
                LARECOMP_SCREENSHOT_EVERY='10', LARECOMP_SCREENSHOT_FROM='1400', LARECOMP_SHOT_RAW=raw,
                LARECOMP_FRAMETIME_CSV=os.path.join(out, 'frametimes.csv'), LARECOMP_EXIT_AT_PRESENT=str(frames))
     env['PATH'] = 'C:/msys64/ucrt64/bin;C:/msys64/usr/bin;' + env.get('PATH', '')
@@ -71,7 +72,7 @@ def run(name, game, frames, save, fps, turbo, extra):
     env.update(env_keys)
     t0 = time.time()
     with open(log, 'w') as lf:
-        p = subprocess.Popen([os.path.join(ROOT, 'build', 'lasrecomp.exe'), root, '--play'], cwd=ROOT, env=env,
+        p = subprocess.Popen([exe, root, '--play'], cwd=ROOT, env=env,
                              stdout=lf, stderr=subprocess.STDOUT)
         txt = ''
         while time.time() - t0 < 3600:
@@ -132,7 +133,7 @@ if __name__ == '__main__':
         sys.exit()
     name, rest = a[1], a[2:]
     opt = {'--game': 'eevee', '--frames': '20000', '--save': 'D:/Jogos/LetsGoRecomp-Eevee/save/save_0/savedata.bin',
-           '--fps': '60', '--turbo': '1'}
+           '--fps': '60', '--turbo': '1', '--leg': '80'}
     extra = {}
     i = 0
     while i < len(rest):
@@ -140,4 +141,5 @@ if __name__ == '__main__':
             opt[rest[i]] = rest[i + 1]; i += 2
         else:
             k, _, v = rest[i].partition('='); extra[k] = v; i += 1
-    run(name, opt['--game'], int(opt['--frames']), opt['--save'], int(opt['--fps']), opt['--turbo'] == '1', extra)
+    run(name, opt['--game'], int(opt['--frames']), opt['--save'], int(opt['--fps']), opt['--turbo'] == '1', extra,
+        int(opt['--leg']))
