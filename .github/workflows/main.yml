@@ -1,0 +1,146 @@
+# Archivo único para tu fork. Crealo en GitHub con el nombre: .github/workflows/build-windows.yml
+# No hace falta git ni editar nada más: este workflow aplica solo los cambios SSE4.2 (x86-64-v2) antes de compilar
+# y construye LetsGoRecomp-<version>-windows.zip siguiendo "make dist" del proyecto.
+# No incluye ningún archivo del juego: el juego se prepara en tu PC desde tu propia copia.
+name: build-windows
+
+on:
+  workflow_dispatch:        # botón "Run workflow" en la pestaña Actions
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      # Los scripts bash del proyecto se rompen con CRLF: el checkout debe usar LF.
+      - name: Fin de línea LF
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Aplica el parche SSE4.2: Makefile (v3 -> v2) y la comprobación de CPU al arrancar (AVX2 -> SSE4.2 + POPCNT).
+      - name: Aplicar cambios SSE4.2 (sin AVX2)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+
+          def read(path):
+              return pathlib.Path(path).read_bytes().decode('utf-8')
+
+          def write(path, s):
+              pathlib.Path(path).write_bytes(s.encode('utf-8'))
+
+          def edit(path, pairs):
+              s = read(path)
+              for old, new in pairs:
+                  if old in s:
+                      s = s.replace(old, new)
+                  elif new not in s:
+                      sys.exit(f"ERROR: no se encontro el texto esperado en {path}:\n{old}")
+              write(path, s)
+
+          mk = read('Makefile')
+          write('Makefile', mk.replace('-march=x86-64-v3', '-march=x86-64-v2'))
+          mk = read('Makefile')
+          assert 'x86-64-v3' not in mk and 'x86-64-v2' in mk, 'Makefile sin cambiar'
+
+          cpu_old = 'if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2")) return;'
+          cpu_new = 'if (__builtin_cpu_supports("sse4.2") && __builtin_cpu_supports("popcnt")) return;'
+          edit('runtime/platform/windows.c', [
+              (cpu_old, cpu_new),
+              ('needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or newer).',
+               'needs a CPU with SSE4.2 and POPCNT (Intel Nehalem / 2008 or newer).'),
+          ])
+          edit('runtime/platform/linux.c', [(cpu_old, cpu_new)])
+          print('Cambios SSE4.2 aplicados')
+          PY
+          grep -n "GENARCH  ?=" Makefile
+          grep -n "supports" runtime/platform/windows.c
+          if grep -q 'supports("avx2")' runtime/platform/windows.c; then
+            echo "::error::windows.c sigue exigiendo AVX2"; exit 1
+          fi
+
+      # Entorno Python del generador de código (el Makefile busca .venv/Scripts/python.exe).
+      - name: Crear .venv con las dependencias del generador
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install lz4 capstone unicorn pyinstaller
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            zip
+            unzip
+            curl
+            git
+            diffutils
+            patch
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-lld
+            mingw-w64-ucrt-x86_64-binutils
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-sdl3
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-vulkan-devel
+            mingw-w64-ucrt-x86_64-shaderc
+            mingw-w64-ucrt-x86_64-spirv-tools
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-vulkan-memory-allocator
+
+      # FFmpeg LGPL (lo más lento: ~15-30 min la primera vez; después sale de la caché).
+      - name: Caché de dependencias (FFmpeg LGPL y Zig)
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/deps-win
+            build/zig-dl
+          key: deps-${{ runner.os }}-${{ hashFiles('tools/build_deps_windows.sh', 'tools/fetch_zig.sh') }}
+
+      - name: make deps-windows
+        shell: msys2 {0}
+        run: make deps-windows
+
+      - name: make gen-helper (generador congelado con PyInstaller)
+        shell: msys2 {0}
+        run: make gen-helper
+
+      - name: Descargar Zig (versión fija, con sha256)
+        shell: msys2 {0}
+        run: tools/fetch_zig.sh
+
+      - name: make dist
+        shell: msys2 {0}
+        run: make dist
+
+      - name: Localizar el zip
+        id: zip
+        shell: bash
+        run: |
+          f=$(ls build/dist/LetsGoRecomp-*-windows.zip | head -n1)
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+          echo "Zip generado: $f"
+          ls -lh "$f"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LetsGoRecomp-sse42-windows
+          path: ${{ steps.zip.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
