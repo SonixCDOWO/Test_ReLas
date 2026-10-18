@@ -1,5 +1,6 @@
 // Executes recorded NVN command lists with Vulkan (port of renderer.m; same structure, same behaviour).
 #include <SDL3/SDL_cpuinfo.h>
+#include <immintrin.h>
 #include <SDL3/SDL_timer.h>
 #include <float.h>
 #include <math.h>
@@ -43,8 +44,9 @@ static _Atomic uint64_t stat_translate_ns, stat_spirv_ns, stat_pipe_ns;  // CPU 
 static uint64_t stat_shader_wait_ns;  // draws waiting for their program / pipeline (wait_built)
 static _Atomic int new_pipes;  // pipelines created since the pipeline cache was last saved
 static uint64_t op_counts[CMD_COUNT];
+static uint64_t stat_vtx_copied, stat_vtx_direct;  // vertex / index ranges of the draws: copied to VRAM / read in place
 bool g_debug_frame;
-static char stats_text[640];
+static char stats_text[1024];
 void vk_collect_dead(void);
 
 // ================================================================== submissions
@@ -242,10 +244,12 @@ void vk_gpuprof_report(void) {
     gp_n = 0;
 }
 
+static void ring_flush_gpu(void);
 // Submit the pending work (if any). wait/signal: binary semaphores for presentation (may be null).
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra) {
     (void)extra;
     vk_end_pass();
+    ring_flush_gpu();
     Sub *s = sub();
     if (!s->main_begun && !s->upload_begun && !wait && !signal) return;
     VkCommandBufferSubmitInfo cbs[2];
@@ -337,66 +341,155 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout layout) {
 }
 
 // ================================================================== transient memory ring
-// 64 MB host-visible chunks (device-local when the GPU exposes resizable BAR); a chunk is reused once every
-// submission that allocated from it has completed.
-#define CHUNK_SIZE (64ull << 20)
-typedef struct { VkBuffer buf; VmaAllocation mem; uint8_t *ptr; uint64_t size, used, seq; } Chunk;
-static Chunk *chunks;
-static int nchunks, active = -1;
+// The largest index of a draw (bounds the vertex data copied for it), ignoring the restart value: AVX2 where the CPU has it (the
+// game code needs it too), a plain loop elsewhere. A draw scans a few thousand indices: ~1.4 us scalar, ~0.15 us here.
+__attribute__((target("avx2"))) static uint32_t scan_max16_avx2(const uint16_t *q, uint32_t n, uint16_t restart) {
+    __m256i acc = _mm256_setzero_si256(), rs = _mm256_set1_epi16((short)restart);
+    uint32_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        __m256i v = _mm256_loadu_si256((const __m256i *)(q + i));
+        acc = _mm256_max_epu16(acc, _mm256_andnot_si256(_mm256_cmpeq_epi16(v, rs), v));
+    }
+    uint16_t t[16];
+    _mm256_storeu_si256((__m256i *)t, acc);
+    uint32_t m = 0;
+    for (int k = 0; k < 16; k++) if (t[k] > m) m = t[k];
+    for (; i < n; i++) if (q[i] != restart && q[i] > m) m = q[i];
+    return m;
+}
+__attribute__((target("avx2"))) static uint32_t scan_max32_avx2(const uint32_t *q, uint32_t n, uint32_t restart) {
+    __m256i acc = _mm256_setzero_si256(), rs = _mm256_set1_epi32((int)restart);
+    uint32_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256i v = _mm256_loadu_si256((const __m256i *)(q + i));
+        acc = _mm256_max_epu32(acc, _mm256_andnot_si256(_mm256_cmpeq_epi32(v, rs), v));
+    }
+    uint32_t t[8];
+    _mm256_storeu_si256((__m256i *)t, acc);
+    uint32_t m = 0;
+    for (int k = 0; k < 8; k++) if (t[k] > m) m = t[k];
+    for (; i < n; i++) if (q[i] != restart && q[i] > m) m = q[i];
+    return m;
+}
+static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32_t restart) {
+    static int avx2 = -1;
+    if (avx2 < 0) avx2 = __builtin_cpu_supports("avx2");
+    uint32_t m = 0;
+    if (isz == 2) {
+        if (avx2) return scan_max16_avx2(src, n, (uint16_t)restart);
+        const uint16_t *q = src;
+        for (uint32_t i = 0; i < n; i++) if (q[i] > m && q[i] != (uint16_t)restart) m = q[i];
+    } else {
+        if (avx2) return scan_max32_avx2(src, n, restart);
+        const uint32_t *q = src;
+        for (uint32_t i = 0; i < n; i++) if (q[i] > m && q[i] != restart) m = q[i];
+    }
+    return m;
+}
 
-static int new_chunk(uint64_t size) {
-    chunks = realloc(chunks, (nchunks + 1) * sizeof *chunks);
-    Chunk *c = &chunks[nchunks];
+// Two pools of 64 MB chunks, a chunk reused once every submission that allocated from it has completed.
+// Pool 0: host-visible chunks (VRAM through the BAR when the GPU has one) the GPU reads in place: constants and the sources of
+// texture uploads. Pool 1 (ring_gpu_enabled, discrete GPUs): the vertex and index data of the draws, in VRAM. The CPU writes a
+// staging chunk in system memory and each submission starts with a copy of what was written since the last one (ring_flush_gpu),
+// so the GPU fetches vertices from VRAM instead of reading the game's memory over PCIe once per vertex invocation (an
+// instanced draw re-read its per-instance streams for every vertex: ~0.8 ms for 71 thousand invocations, docs/PESQUISA-GPU.md).
+#define CHUNK_SIZE (64ull << 20)
+typedef struct { VkBuffer buf, dev; VmaAllocation mem, dmem; uint8_t *ptr; uint64_t size, used, seq, flushed; } Chunk;
+typedef struct { Chunk *c; int n, active; bool gpu; } Pool;
+static Pool pools[2] = {{.active = -1}, {.active = -1, .gpu = true}};
+
+// LARECOMP_VERTEX_READ=direct|copy|auto (default auto: copies on a discrete GPU, in place on an integrated one, whose memory
+// is the system's). The draws' own ranges the GPU writes stay in place either way (gpuw below).
+static bool ring_gpu_enabled(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("LARECOMP_VERTEX_READ");
+        if (e && !strcmp(e, "direct")) on = 0;
+        else if (e && (!strcmp(e, "copy") || !strcmp(e, "hybrid"))) on = 1;
+        else on = g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        LOG("[vk] vertex and index data: %s\n", on ? "copied to VRAM (ranges the GPU writes are read in place)" : "read in place from the game's memory");
+    }
+    return on;
+}
+
+static int new_chunk(Pool *pl, uint64_t size) {
+    pl->c = realloc(pl->c, (pl->n + 1) * sizeof *pl->c);
+    Chunk *c = &pl->c[pl->n];
     memset(c, 0, sizeof *c);
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
-                             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
-    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO,
-                                  .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+                             .usage = pl->gpu ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+                                              : VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+    VmaAllocationCreateInfo ai = {.usage = pl->gpu ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST : VMA_MEMORY_USAGE_AUTO,
+                                  .flags = (pl->gpu ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT) |
+                                           VMA_ALLOCATION_CREATE_MAPPED_BIT};
     VmaAllocationInfo info;
     VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &c->buf, &c->mem, &info));
     c->ptr = info.pMappedData;
     c->size = size;
-    {   // (where the GPU reads the vertex / uniform copies from: VRAM through the BAR, or system memory over PCIe)
-        VkMemoryPropertyFlags mp = 0;
-        vmaGetAllocationMemoryProperties(g_vk.vma, c->mem, &mp);
-        const VkPhysicalDeviceMemoryProperties *props;
-        vmaGetMemoryProperties(g_vk.vma, &props);
-        uint32_t heap = props->memoryTypes[info.memoryType].heapIndex;
-        LOG("[vk] ring chunk %d: %llu MB, memory type %u (%s%s%s), heap %u of %llu MB\n", nchunks, (unsigned long long)(size >> 20),
-            info.memoryType, mp & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? "device-local " : "system memory ",
-            mp & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? "host-visible " : "", mp & VK_MEMORY_PROPERTY_HOST_CACHED_BIT ? "cached" : "write-combined",
-            heap, (unsigned long long)(props->memoryHeaps[heap].size >> 20));
+    if (pl->gpu) {
+        VkBufferCreateInfo di = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
+                                 .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo da = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        VK_CHECK(vmaCreateBuffer(g_vk.vma, &di, &da, &c->dev, &c->dmem, NULL));
     }
-    return nchunks++;
+    {   // (where the GPU reads the copies from: VRAM through the BAR, or system memory over PCIe)
+        VkMemoryPropertyFlags mp = 0;
+        vmaGetAllocationMemoryProperties(g_vk.vma, pl->gpu ? c->dmem : c->mem, &mp);
+        LOG("[vk] ring %d chunk %d: %llu MB, %s%s\n", pl->gpu ? 1 : 0, pl->n, (unsigned long long)(size >> 20),
+            mp & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? "device-local" : "system memory",
+            mp & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? " host-visible" : "");
+    }
+    return pl->n++;
 }
 
-static void ring_retire(void) {}  // chunks are recycled lazily in vk_transient
+static void ring_retire(void) {}  // chunks are recycled lazily in transient_from
 
-VkSpan vk_transient(uint64_t size, uint64_t align) {
+static VkSpan transient_from(Pool *pl, uint64_t size, uint64_t align) {
     if (align < 16) align = 16;
     uint64_t pending = vk_pending_seq();
-    if (active >= 0) {
-        Chunk *c = &chunks[active];
+    if (pl->active >= 0) {
+        Chunk *c = &pl->c[pl->active];
         uint64_t off = (c->used + align - 1) & ~(align - 1);
         if (off + size <= c->size) {
             c->used = off + size;
             c->seq = pending;
             stat_upload_bytes += size;
-            return (VkSpan){c->buf, off, c->ptr + off};
+            return (VkSpan){pl->gpu ? c->dev : c->buf, off, c->ptr + off};
         }
     }
     uint64_t done = vk_completed_seq();
     int pick = -1;
-    for (int i = 0; i < nchunks; i++)
-        if (i != active && chunks[i].seq <= done && chunks[i].size >= size) { pick = i; break; }
-    if (pick < 0) pick = new_chunk(size > CHUNK_SIZE ? size : CHUNK_SIZE);
-    active = pick;
-    chunks[pick].used = size;
-    chunks[pick].seq = pending;
+    for (int i = 0; i < pl->n; i++)
+        if (i != pl->active && pl->c[i].seq <= done && pl->c[i].size >= size) { pick = i; break; }
+    if (pick < 0) pick = new_chunk(pl, size > CHUNK_SIZE ? size : CHUNK_SIZE);
+    pl->active = pick;
+    Chunk *c = &pl->c[pick];
+    c->used = size;
+    c->flushed = 0;
+    c->seq = pending;
     stat_upload_bytes += size;
-    return (VkSpan){chunks[pick].buf, 0, chunks[pick].ptr};
+    return (VkSpan){pl->gpu ? c->dev : c->buf, 0, c->ptr};
+}
+
+VkSpan vk_transient(uint64_t size, uint64_t align) { return transient_from(&pools[0], size, align); }
+// Vertex / index data of a draw: in VRAM (valid once the submission's first copy has run), or as vk_transient where that is off.
+static VkSpan transient_gpu(uint64_t size, uint64_t align) { return transient_from(&pools[ring_gpu_enabled() ? 1 : 0], size, align); }
+
+// The start of a submission: the staging bytes written since the last one go to VRAM (the upload buffer runs first, then a
+// barrier, vk_submit_extra).
+static void ring_flush_gpu(void) {
+    Pool *pl = &pools[1];
+    for (int i = 0; i < pl->n; i++) {
+        Chunk *c = &pl->c[i];
+        if (c->used <= c->flushed) continue;
+        VkBufferCopy rg = {c->flushed, c->flushed, c->used - c->flushed};
+        vkCmdCopyBuffer(vk_upload_cmd(), c->buf, c->dev, 1, &rg);
+        c->flushed = c->used;
+    }
 }
 
 // GPU -> CPU copies: the ring is write-combined (often device-local over the BAR), where CPU reads crawl (a
@@ -441,16 +534,46 @@ static VkSpan copy_dedupe(int slot, const void *data, uint64_t size, uint64_t al
 
 // Guest memory copied once per submission: draws binding the same range share the copy.
 #define GCOPY_TAB 4096
-static struct { uint64_t addr, size, seq; VkSpan span; } gcopy[GCOPY_TAB];
+static struct { uint64_t addr, size, seq; VkSpan span; bool gpu; } gcopy[GCOPY_TAB];
 static uint64_t gcopy_gen;  // bumped to drop every shared copy (guest memory written mid-list)
 static void guest_copy_flush(void) { gcopy_gen++; }
-static VkSpan guest_copy(uint64_t addr, uint64_t size) {
+static VkSpan transient_gpu_copy(const void *data, uint64_t size, uint64_t align) {
+    VkSpan s = transient_gpu(size ? size : 16, align);
+    if (size) memcpy(s.ptr, data, size);
+    return s;
+}
+static VkSpan guest_copy_pool(uint64_t addr, uint64_t size, bool gpu) {  // (gpu: vertex / index data, in VRAM when that ring is on)
     uint64_t seq = vk_pending_seq() + (gcopy_gen << 40), h = (addr * 0x9E3779B97F4A7C15ull) ^ (size * 0xC2B2AE3D27D4EB4Full);
     uint32_t slot = (uint32_t)(h ^ (h >> 32)) & (GCOPY_TAB - 1);
-    if (gcopy[slot].seq == seq && gcopy[slot].addr == addr && gcopy[slot].size == size) return gcopy[slot].span;
-    VkSpan s = vk_transient_copy((const void *)(uintptr_t)addr, size, 256);
-    gcopy[slot].addr = addr; gcopy[slot].size = size; gcopy[slot].seq = seq; gcopy[slot].span = s;
+    if (gcopy[slot].seq == seq && gcopy[slot].addr == addr && gcopy[slot].size == size && gcopy[slot].gpu == gpu) return gcopy[slot].span;
+    VkSpan s = gpu ? transient_gpu_copy((const void *)(uintptr_t)addr, size, 256) : vk_transient_copy((const void *)(uintptr_t)addr, size, 256);
+    gcopy[slot].addr = addr; gcopy[slot].size = size; gcopy[slot].seq = seq; gcopy[slot].span = s; gcopy[slot].gpu = gpu;
     return s;
+}
+static VkSpan guest_copy(uint64_t addr, uint64_t size) { return guest_copy_pool(addr, size, false); }
+
+// Vertex data copied to VRAM, once per start address and submission: every draw of a mesh starts at the same address and wants a
+// prefix of it (up to its largest index), so one copy serves them all. A per-vertex stream is copied whole (its bound range, up to
+// 8 MB) the first time, so that later draws of other parts of the buffer don't copy it again (37 MB a frame became 16).
+#define VCOPY_TAB 1024
+static struct { uint64_t addr, len, seq; VkSpan span; } vcopy[VCOPY_TAB];
+static VkSpan vertex_copy(uint64_t addr, uint64_t need, uint64_t bound, bool per_vertex) {
+    uint64_t seq = vk_pending_seq() + (gcopy_gen << 40);
+    uint32_t h = (uint32_t)((addr >> 4) * 0x9E3779B1u) & (VCOPY_TAB - 1), at = h;
+    for (int i = 0; i < 4; i++) {
+        uint32_t k = (h + i) & (VCOPY_TAB - 1);
+        if (vcopy[k].addr == addr && vcopy[k].seq == seq) {
+            if (vcopy[k].len >= need) return vcopy[k].span;
+            at = k;  // (a longer prefix is needed now: a new copy replaces it)
+            goto copy;
+        }
+        if (vcopy[k].seq != seq) at = k;  // (a free or stale slot)
+    }
+copy:;
+    uint64_t len = per_vertex && bound <= (8ull << 20) && bound > need ? bound : need;
+    VkSpan sp = transient_gpu_copy((const void *)(uintptr_t)addr, len, 256);
+    vcopy[at].addr = addr; vcopy[at].len = len; vcopy[at].seq = seq; vcopy[at].span = sp;
+    return sp;
 }
 
 // ================================================================== worker threads (shader / pipeline builds)
@@ -628,6 +751,11 @@ const char *renderer_stats(void) {
              atomic_exchange(&stat_compiles, 0), atomic_exchange(&stat_translate_ns, 0) / 1e6, atomic_exchange(&stat_spirv_ns, 0) / 1e6, atomic_exchange(&stat_pipe_ns, 0) / 1e6,
              stat_shader_wait_ns / 1e6,
              (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
+    {
+        size_t n = strlen(stats_text);
+        snprintf(stats_text + n, sizeof stats_text - n, " | vertex ranges %llu copied, %llu in place", (unsigned long long)stat_vtx_copied, (unsigned long long)stat_vtx_direct);
+        stat_vtx_copied = stat_vtx_direct = 0;
+    }
     stat_feedback_copies = stat_upload_bytes = stat_shader_wait_ns = 0;
     if (g_exp_count[0] | g_exp_count[1] | g_exp_count[2] | g_exp_count[3]) {
         LOG("[exp] skin identity %llu, ubo direct %llu, ubo copied %llu, one-bone shaders %llu\n",
@@ -1462,6 +1590,49 @@ static VkPrimitiveTopology topo_class_base(uint8_t c) {
     return c == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST : c == 1 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 }
 
+// LARECOMP_PIPE_STATS=<vertex program address, hex>|all: after each pipeline is created, what the driver reports about its
+// compiled shaders (VK_KHR_pipeline_executable_properties: one executable per stage; registers, spills, instructions...).
+static void pipe_exec_report(VkPipeline pipe, uint64_t vs, uint64_t fs) {
+    const char *want = getenv("LARECOMP_PIPE_STATS");
+    if (!want || (strcmp(want, "all") && strtoull(want, NULL, 16) != vs)) return;
+    static PFN_vkGetPipelineExecutablePropertiesKHR get_props;
+    static PFN_vkGetPipelineExecutableStatisticsKHR get_stats;
+    if (!get_props) {
+        get_props = (PFN_vkGetPipelineExecutablePropertiesKHR)vkGetDeviceProcAddr(g_vk.dev, "vkGetPipelineExecutablePropertiesKHR");
+        get_stats = (PFN_vkGetPipelineExecutableStatisticsKHR)vkGetDeviceProcAddr(g_vk.dev, "vkGetPipelineExecutableStatisticsKHR");
+        if (!get_props || !get_stats) { LOG("[pipestats] the driver does not export the functions\n"); return; }
+    }
+    uint32_t n = 0;
+    VkPipelineInfoKHR pinfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR, .pipeline = pipe};
+    if (get_props(g_vk.dev, &pinfo, &n, NULL) != VK_SUCCESS || !n) return;
+    VkPipelineExecutablePropertiesKHR props[8] = {0};
+    if (n > 8) n = 8;
+    for (uint32_t i = 0; i < n; i++) props[i].sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR;
+    if (get_props(g_vk.dev, &pinfo, &n, props) != VK_SUCCESS) return;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t ns = 0;
+        VkPipelineExecutableInfoKHR einfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR, .pipeline = pipe, .executableIndex = i};
+        if (get_stats(g_vk.dev, &einfo, &ns, NULL) != VK_SUCCESS) continue;
+        VkPipelineExecutableStatisticKHR stats[64] = {0};
+        if (ns > 64) ns = 64;
+        for (uint32_t s = 0; s < ns; s++) stats[s].sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR;
+        if (get_stats(g_vk.dev, &einfo, &ns, stats) != VK_SUCCESS) continue;
+        char line[1024];
+        int l = snprintf(line, sizeof line, "[pipestats] vs %llx fs %llx  %s (stages %#x):", (unsigned long long)vs, (unsigned long long)fs,
+                         props[i].name, props[i].stages);
+        for (uint32_t s = 0; s < ns && l < (int)sizeof line - 80; s++) {
+            const VkPipelineExecutableStatisticValueKHR *v = &stats[s].value;
+            switch (stats[s].format) {
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR: l += snprintf(line + l, sizeof line - l, " %s=%u;", stats[s].name, v->b32); break;
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR: l += snprintf(line + l, sizeof line - l, " %s=%lld;", stats[s].name, (long long)v->i64); break;
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR: l += snprintf(line + l, sizeof line - l, " %s=%llu;", stats[s].name, (unsigned long long)v->u64); break;
+            default: l += snprintf(line + l, sizeof line - l, " %s=%g;", stats[s].name, v->f64); break;
+            }
+        }
+        LOG("%s\n", line);
+    }
+}
+
 static void build_pipeline(void *arg) {
     Pipe *pp = arg;
     PipeKey *k = &pp->k;
@@ -1485,6 +1656,18 @@ static void build_pipeline(void *arg) {
     VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, .pNext = nd ? &dvi : NULL,
                                                .vertexBindingDescriptionCount = nb, .pVertexBindingDescriptions = vb,
                                                .vertexAttributeDescriptionCount = na, .pVertexAttributeDescriptions = va};
+    {   // (LARECOMP_PIPE_STATS: the vertex fetch layout of the program asked for)
+        const char *w = getenv("LARECOMP_PIPE_STATS");
+        if (w && (!strcmp(w, "all") || strtoull(w, NULL, 16) == k->prog->code[0])) {
+            LOG("[pipestats] vs %llx inputs:", (unsigned long long)k->prog->code[0]);
+            for (uint32_t i = 0; i < na; i++) LOG(" a%u(bind %u fmt %d off %u)", va[i].location, va[i].binding, (int)va[i].format, va[i].offset);
+            LOG(" | bindings:");
+            for (uint32_t i = 0; i < nb; i++)
+                LOG(" %u(stride %u %s)", vb[i].binding, vb[i].stride, vb[i].inputRate == VK_VERTEX_INPUT_RATE_INSTANCE ? "instance" : "vertex");
+            for (uint32_t i = 0; i < nd; i++) LOG(" div%u=%u", vd[i].binding, vd[i].divisor);
+            LOG("\n");
+        }
+    }
     VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
                                                  .topology = topo_class_base(k->topo_class)};
     VkPipelineViewportStateCreateInfo vs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
@@ -1519,8 +1702,11 @@ static void build_pipeline(void *arg) {
                                        .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &ds,
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = k->prog->layout};
     uint64_t tp = SDL_GetTicksNS();
+    extern bool g_pipe_exec_stats;
+    if (g_pipe_exec_stats) pi.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
     VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &pp->pipe);
     atomic_fetch_add(&stat_pipe_ns, SDL_GetTicksNS() - tp);
+    if (r == VK_SUCCESS && g_pipe_exec_stats) pipe_exec_report(pp->pipe, k->prog->code[0], k->prog->code[1]);
     if (r != VK_SUCCESS) {
         static int n;
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
@@ -1808,6 +1994,56 @@ static VkDescriptorBufferInfo gmem_info(void) {
     return (VkDescriptorBufferInfo){s.buf, s.off, sizeof zero};
 }
 
+// Guest memory ranges the GPU may write: the storage buffers a compute dispatch binds (the game's compute shaders produce vertex
+// data for some draws: a 16-byte stream here, a few more there). Vertex or index data inside one of them is read in place when
+// the GPU runs, as the game expects, and is never copied when the draw is recorded (the copy would hold what the GPU has not
+// written yet). Sorted, merged intervals; the render thread is the only user.
+static struct { uint64_t a, e; } gpuw[512];
+static int ngpuw;
+static void gpuw_note(uint64_t a, uint64_t n) {
+    uint64_t e = a + (n ? n : 16);
+    int i = 0, j;
+    while (i < ngpuw && gpuw[i].e < a) i++;
+    for (j = i; j < ngpuw && gpuw[j].a <= e; j++) {
+        if (gpuw[j].a < a) a = gpuw[j].a;
+        if (gpuw[j].e > e) e = gpuw[j].e;
+    }
+    if (j > i) {  // merged with [i, j)
+        if (i + 1 == j && gpuw[i].a == a && gpuw[i].e == e) return;  // (known)
+        gpuw[i].a = a; gpuw[i].e = e;
+        memmove(&gpuw[i + 1], &gpuw[j], (size_t)(ngpuw - j) * sizeof gpuw[0]);
+        ngpuw -= j - i - 1;
+    } else {
+        if (ngpuw == 512) { if (gpuw[ngpuw - 1].e < e) gpuw[ngpuw - 1].e = e; return; }  // (full: widen the last, stays safe)
+        memmove(&gpuw[i + 1], &gpuw[i], (size_t)(ngpuw - i) * sizeof gpuw[0]);
+        gpuw[i].a = a; gpuw[i].e = e;
+        ngpuw++;
+    }
+    if (ENV("LARECOMP_LOG_GPUWRITES")) LOG("[gpuw] the GPU may write %llx-%llx (%d ranges)\n", (unsigned long long)a, (unsigned long long)e, ngpuw);
+}
+// A shader that stores to global memory with no storage buffer bound writes through pointers we cannot see: from then on every
+// vertex / index range is read in place, as before the VRAM ring (slower, never stale).
+static bool gpuw_unknown;
+static void gpuw_stores(const ShaderInfo *si, const Range *sbufs, int n, const char *what, uint64_t code) {
+    if (!si || !si->gmem_stores) return;
+    bool any = false;
+    for (int i = 0; i < n; i++) if (sbufs[i].addr) { gpuw_note(sbufs[i].addr, sbufs[i].size); any = true; }
+    if (!any && !gpuw_unknown) {
+        gpuw_unknown = true;
+        LOG("[vk] %s %llx stores to global memory without a storage buffer: vertex and index data is read in place from now on\n", what, (unsigned long long)code);
+    }
+}
+static bool gpuw_overlaps(uint64_t a, uint64_t n) {
+    uint64_t e = a + n;
+    if (gpuw_unknown) return true;
+    int lo = 0, hi = ngpuw;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (gpuw[mid].e <= a) lo = mid + 1; else hi = mid;
+    }
+    return lo < ngpuw && gpuw[lo].a < e;
+}
+
 // Vertex / index data read in place from the imported guest heap (renderer.m bind_guest does the same with
 // g_guest_buffer): no per-draw copy, no index scan for the copy size. The game fences its CPU writes as on the
 // Switch. Falls back to copies outside the heap or without the import; LARECOMP_VK_COPY_VERTICES=1 forces copies.
@@ -1820,6 +2056,14 @@ static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSi
     *buf = gmem_buf;
     *off = addr - HEAP_BASE;
     return true;
+}
+// Vertex / index range of a draw: in place from the game's memory (true) or to be copied (false). With the VRAM ring on, copied
+// unless a compute dispatch may write it.
+static bool vtx_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
+    if (ring_gpu_enabled() && !gpuw_overlaps(addr, size)) { stat_vtx_copied++; return false; }
+    bool d = guest_direct(addr, size, buf, off);
+    if (d) stat_vtx_direct++;
+    return d;
 }
 bool vk_guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {  // (cbuf_info, above)
     return guest_direct(addr, size, buf, off);
@@ -1834,6 +2078,7 @@ void vk_exec_reset(void) {
     memset(prog_tab, 0, sizeof prog_tab);
     memset(pipe_tab, 0, sizeof pipe_tab);
     g_cs_n = 0;
+    ngpuw = 0;  // (guest memory is replaced)
     gcopy_gen++;
     if (gmem_buf) {
         vkDestroyBuffer(g_vk.dev, gmem_buf, NULL);
@@ -2015,6 +2260,8 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     vk_full_barrier(cb);
     gp_mark(cb, "dispatch %ux%ux%u (local %ux%ux%u)", gx, gy, gz, cp->local[0], cp->local[1], cp->local[2]);
     dl_note("dispatch %ux%ux%u cs %llx gmem %d", gx, gy, gz, (unsigned long long)st.program->stages[5].code_addr, cp->si->uses_gmem);
+    gpuw_stores(cp->si, st.sbuf[5], 16, "compute shader", st.program->stages[5].code_addr);
+    for (int i = 0; i < 16; i++) if (st.sbuf[5][i].addr) gpuw_note(st.sbuf[5][i].addr, st.sbuf[5][i].size);  // (any storage buffer it has bound)
     nfeedback = 0;
     VkDescriptorSet ds = stage_set(&cp->p, cp->p.set_layout[0], 0, 5, cp->si, NULL, NULL, gx, gy, gz, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cp->pipe);
@@ -2373,6 +2620,8 @@ static void draw_(CmdRec *r, bool indexed) {
     apply_scissor();
     float rs0[4] = {vp_sx, vp_sy, vp_ox, vp_oy};
     uint64_t prof_t1_ = prof ? SDL_GetTicksNS() : 0;
+    gpuw_stores(pr->vi, st.sbuf[0], 16, "vertex shader", st.program->stages[0].code_addr);
+    gpuw_stores(pr->fi, st.sbuf[1], 16, "fragment shader", st.program->stages[1].code_addr);
     VkDescriptorSet fset = stage_set(pr, pr->set_layout[1], 1, 1, pr->fi, rs0, tint, 0, 0, 0, fii);
     if (prof) prof_sets += SDL_GetTicksNS() - prof_t1_;
     VkDescriptorSet sets[2] = {vset, fset};
@@ -2408,12 +2657,11 @@ static void draw_(CmdRec *r, bool indexed) {
             uint32_t isz = itype == 1 ? 2 : 4;
             itype_vk = itype == 1 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
             icount = count;
-            if (iaddr % isz == 0 && guest_direct(iaddr, (uint64_t)count * isz, &ib.buf, &ib.off)) {
+            if (iaddr % isz == 0 && vtx_direct(iaddr, (uint64_t)count * isz, &ib.buf, &ib.off)) {
                 scan_src = src; scan_isz = isz; scan_restart = restart;  // max_index only if a stream gets copied
             } else {
-                ib = vk_transient_copy(src, (uint64_t)count * isz + 4, 4);
-                if (isz == 2) { const uint16_t *s = src; for (uint32_t i = 0; i < count; i++) if (s[i] > max_index && s[i] != (uint16_t)restart) max_index = s[i]; }
-                else { const uint32_t *s = src; for (uint32_t i = 0; i < count; i++) if (s[i] > max_index && s[i] != restart) max_index = s[i]; }
+                ib = transient_gpu_copy(src, (uint64_t)count * isz + 4, 4);
+                { uint32_t m = scan_max_index(src, isz, count, restart); if (m > max_index) max_index = m; }
             }
         } else if (native) {  // 8-bit indices: widen to 16
             ib = vk_transient((uint64_t)count * 2 + 4, 4);
@@ -2446,13 +2694,12 @@ static void draw_(CmdRec *r, bool indexed) {
             Range v = st.vbuf[s];
             VkBuffer dbuf;
             VkDeviceSize doff;
-            if (v.addr && v.size && guest_direct(v.addr, v.size, &dbuf, &doff)) {
+            if (v.addr && v.size && vtx_direct(v.addr, v.size, &dbuf, &doff)) {
                 vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &dbuf, &doff);
                 continue;
             }
             if (scan_src) {  // copying after all: the index scan bounds the copy
-                if (scan_isz == 2) { const uint16_t *q = scan_src; for (uint32_t i = 0; i < icount; i++) if (q[i] > max_index && q[i] != (uint16_t)scan_restart) max_index = q[i]; }
-                else { const uint32_t *q = scan_src; for (uint32_t i = 0; i < icount; i++) if (q[i] > max_index && q[i] != scan_restart) max_index = q[i]; }
+                { uint32_t m = scan_max_index(scan_src, scan_isz, icount, scan_restart); if (m > max_index) max_index = m; }
                 max_index += 1;
                 if (base_vertex > 0) max_index += (uint32_t)base_vertex;
                 scan_src = NULL;
@@ -2463,7 +2710,13 @@ static void draw_(CmdRec *r, bool indexed) {
             else need = (uint64_t)max_index * stride + 256;
             if (v.size && need > v.size) need = v.size;
             if (!v.addr) { static const uint8_t zero[256]; sp = vk_transient_copy(zero, 256, 16); }
-            else sp = guest_copy(v.addr, need ? need : 16);
+            else {
+                sp = vertex_copy(v.addr, need ? need : 16, v.size, k.divisor[s] == 0);
+                if (ENV("LARECOMP_LOG_VCOPY") && g_gpuprof_frame)  // (research: what a profiled frame copies, per stream)
+                    LOG("[vcopy] vs %llx stream %d addr %llx need %llu of bound %llu stride %llu %s max_index %u base_vertex %d base_inst %u inst %u\n",
+                        (unsigned long long)st.program->stages[0].code_addr, s, (unsigned long long)v.addr, (unsigned long long)need,
+                        (unsigned long long)v.size, (unsigned long long)stride, k.divisor[s] ? "instance" : "vertex", max_index, base_vertex, base_inst, inst);
+            }
         }
         VkDeviceSize off = sp.off;
         vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &sp.buf, &off);
