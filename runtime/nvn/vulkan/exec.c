@@ -2454,7 +2454,9 @@ static void draw_(CmdRec *r, bool indexed) {
     memset(&k, 0, sizeof k);
     k.prog = pr;
     k.ncolor = pass_ncolor;
-    memcpy(k.color, pass_color, sizeof k.color);
+    // (only the pass's own slots: the ones past them keep what the last pass with more targets set, so a depth-only
+    // pass's pipelines got several keys and were built again for each - LAS Recomp 3921201)
+    for (uint32_t i = 0; i < pass_ncolor && i < 8; i++) k.color[i] = pass_color[i];
     k.depth = pass_depth;
     k.stencil = pass_stencil;
     k.samples = pass_samples;
