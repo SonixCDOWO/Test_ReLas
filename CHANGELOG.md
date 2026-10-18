@@ -21,7 +21,7 @@
   too (found in another port of the same runtime; not seen in Let's Go).
 - After a crash, no extra "Visual C++ Runtime Library" box. A controller Windows does not recognise can be added with
   your own SDL mapping line in `gamecontrollerdb.txt` next to the exe.
-- Tested with Eevee and Pikachu 1.0.0 on the regression routes (world, menus, area change) and a save from the menu.
+- Tested with Eevee and Pikachu 1.0.0 on the regression routes (world, menus, area change); saving from the menu checked with Eevee.
 - Upgrading: unzip over your install (no new setup).
 - Tested with the zip built for this release, unzipped into a new folder named with accented letters, the game files of 0.3.x installs of both games, started without MSYS2 on the PATH (no recompiling needed): Eevee and Pikachu load a save and reach the world; the start screen rewrote a settings file saved by 0.3.1 with every setting kept.
 
