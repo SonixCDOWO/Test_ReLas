@@ -1377,13 +1377,36 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     }
     uint64_t h = 0xcbf29ce484222325ull;
     for (int i = 0; i < 2; i++) { uint64_t a = np->stages[i].code_addr; for (int k = 0; k < 8; k++) { h ^= (a >> (k * 8)) & 0xFF; h *= 0x100000001B3ull; } }
+    // (and what is at the addresses: a shader archive reloaded elsewhere puts other shaders there, objects.c)
+    for (int i = 0; i < 2; i++) { h ^= np->stages[i].content_hash; h *= 0x100000001B3ull; }
     const uint8_t *vb = (const uint8_t *)vkey;
     for (size_t i = 0; i < sizeof *vkey; i++) { h ^= vb[i]; h *= 0x100000001B3ull; }
     for (int i = 0; i < 8; i++) { h ^= fkey->rt_kind[i]; h *= 0x100000001B3ull; }
     if (!h) h = 1;
     uint32_t slot = (uint32_t)(h ^ (h >> 31)) & (PROG_TAB - 1);
-    while (prog_tab[slot].key && prog_tab[slot].key != h) slot = (slot + 1) & (PROG_TAB - 1);
+    for (int probe = 0; prog_tab[slot].key && prog_tab[slot].key != h; probe++) {
+        if (probe == 64) { prog_tab[slot].key = 0; break; }  // (full run of slots: the entry is replaced, its Prog kept)
+        slot = (slot + 1) & (PROG_TAB - 1);
+    }
     if (prog_tab[slot].key) return prog_tab[slot].prog;
+    {   // an address seen before with other code: the old address-only key would have handed back that shader
+        static struct { uint64_t addr, content; } seen[8192];
+        static uint64_t nother;
+        for (int i = 0; i < 2; i++) {
+            uint64_t a = np->stages[i].code_addr, c = np->stages[i].content_hash;
+            if (!a) continue;
+            uint32_t s = (uint32_t)((a >> 8) * 0x9E3779B1u) & 8191;
+            for (int k = 0; k < 16; k++, s = (s + 1) & 8191) {
+                if (!seen[s].addr) { seen[s].addr = a; seen[s].content = c; break; }
+                if (seen[s].addr != a) continue;
+                if (seen[s].content != c && (nother++, !(nother & (nother - 1))))
+                    LOG("[shader] %s shader address %llx now holds another shader %llu (f%llu)\n", i ? "fragment" : "vertex",
+                        (unsigned long long)a, (unsigned long long)nother, (unsigned long long)renderer_game_frame());
+                seen[s].content = c;
+                break;
+            }
+        }
+    }
     Prog *p = calloc(1, sizeof *p);
     prog_tab[slot].key = h;
     prog_tab[slot].prog = p;
@@ -2241,16 +2264,16 @@ static void build_compute(void *arg) {
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }
 
-static struct CsEnt { uint64_t addr; CsProg *cp; } g_cs_tab[256];  // compute programs by code address
+static struct CsEnt { uint64_t addr, content; CsProg *cp; } g_cs_tab[256];  // compute programs by code address and content
 
 static CsProg *compute_program(NvnProgram *np) {
     NvnShaderStage *ss = &np->stages[5];
     if (!ss->code_addr) return NULL;
     struct CsEnt *tab = g_cs_tab;
     int n = g_cs_n;
-    for (int i = 0; i < n; i++) if (tab[i].addr == ss->code_addr) return tab[i].cp;
+    for (int i = 0; i < n; i++) if (tab[i].addr == ss->code_addr && tab[i].content == ss->content_hash) return tab[i].cp;
     CsProg *cp = calloc(1, sizeof *cp);
-    if (n < 256) { tab[n].addr = ss->code_addr; tab[n].cp = cp; g_cs_n = n + 1; }
+    if (n < 256) { tab[n].addr = ss->code_addr; tab[n].content = ss->content_hash; tab[n].cp = cp; g_cs_n = n + 1; }
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
     ShaderKey k = {0};

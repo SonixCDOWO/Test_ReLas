@@ -610,6 +610,24 @@ NVN(nvnProgramFinalize) { g_nvn_destroyed++; rt_drain(); free(HOST(NvnProgram, A
 NVN(nvnProgramSetDebugLabel) { (void)c; }
 NVN(nvnProgramSetSampleShading) { (void)c; }
 NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
+// The code up to the compiler constants (its length; 4 KB when there are none) and the constants. The renderer keyed
+// translated programs by code address only: after a capture Let's Go loads shaders again at addresses that held other
+// shaders before ("[shader] ... now holds another shader" in the log), and the world drew with old translations (other
+// texture layouts: ferns with the sign's texture, black trees, flat-coloured plants until the area changed;
+// docs/HISTORICO.md 66).
+static uint64_t shader_content_hash(const NvnShaderStage *s) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    uint32_t n = s->const_offset ? s->const_offset : 0x1000;
+    if (n > 0x100000) n = 0x100000;
+    const uint64_t *w = (const uint64_t *)(uintptr_t)s->code_addr;
+    for (uint32_t i = 0; i < n / 8; i++) h = (h ^ w[i]) * 0x100000001b3ull;
+    if (s->const_offset && s->const_size && s->const_size <= 0x10000) {
+        const uint8_t *k = (const uint8_t *)(uintptr_t)(s->code_addr + s->const_offset);
+        for (uint32_t i = 0; i < s->const_size; i++) h = (h ^ k[i]) * 0x100000001b3ull;
+    }
+    return h ? h : 1;
+}
+
 static void set_shaders(Cpu *c, int stride) {
     NvnProgram *p = HOST(NvnProgram, A(0));
     int n = (int)A(1);
@@ -637,6 +655,7 @@ static void set_shaders(Cpu *c, int stride) {
         p->stages[stage].control = control;
         p->stages[stage].const_offset = *(const uint32_t *)(control + 0x700);
         p->stages[stage].const_size = *(const uint32_t *)(control + 0x6FC);
+        p->stages[stage].content_hash = shader_content_hash(&p->stages[stage]);
         p->stage_mask |= 1u << stage;
     }
     RET(1);

@@ -67,6 +67,8 @@ typedef struct NvnShaderStage {
     const uint8_t *control;   // control section
     uint32_t const_offset, const_size;  // compiler constants (bound as c1), within the code blob
     void *backend;
+    uint64_t content_hash;  // the code and constants as SetShaders found them (objects.c): with the address, the key of the
+                            // translated program (the game reloads shader archives elsewhere: another shader at an address)
 } NvnShaderStage;
 
 typedef struct NvnProgram {
