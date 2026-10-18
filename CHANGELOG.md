@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0 (2026-10-18)
+
+A performance release. Everything below was measured on one machine (Core i5-14600KF, RTX 3080, Windows 11), with
+runs taken in turn (A, B, A, B...) because the same frame varies 10-18 ms of GPU time between runs. **Not measured on
+other graphics cards** (AMD, Intel, integrated): feedback is welcome in an issue.
+
+- **The graphics work runs on its own thread (on by default).** The game's calls into the Vulkan backend used to run
+  on the game's own thread, in the chain that also runs its logic. Unlimited frame rate on the Pewter City route:
+  Eevee 126.9 -> 185.5 fps (frame time ratio 1.46, 95% interval 1.40-1.53), Pikachu 132.1 -> 191.4 fps (1.45, 1.31-1.54);
+  the 99th percentile frame time drops from 13.3 to 9.9 ms. At the game's own 30 fps cap you will not see more frames:
+  the gain is CPU headroom. The paced 60 fps mode is
+  unchanged (16.63 ms per frame with and without). Rendered frames match the old path within the run-to-run noise;
+  the Vulkan validation layers report no errors on the regression routes of both games. `render_thread = 0` in
+  `larecomp.ini` (or `LARECOMP_RENDER_THREAD=0`) turns it off.
+- **Models are read from video memory on dedicated GPUs.** The vertex and index data was read by the GPU in place from
+  the game's memory (system memory, over PCIe) for every vertex invocation. It is copied to VRAM now: GPU time of the
+  Pewter City frame 10.2 -> 1.2 ms. Integrated GPUs keep the old path (not tested). `vertex_read = direct` in `larecomp.ini` (or
+  `LARECOMP_VERTEX_READ=direct`) goes back to it.
+- **Mutex waits no longer stall the game threads.** A contended lock spun briefly before sleeping on a condition
+  variable (~1000 contended locks per frame per thread, ~12 us each on Windows). The paced 60 fps mode now holds 60.0
+  fps (it was 58.8-59.3); unlimited frame rate went from about 60 to 65-74 fps at the time.
+- **`larecomp.ini` edited by hand on Windows works**: lines ending in CR+LF kept the CR in the value, so
+  `resolution = dynamic`, `upscaler = bilinear` and the percentage modes fell back silently.
+- **Dynamic resolution** (`resolution = dynamic`, ini only) judged a steady 30 fps as too slow and dropped to 0.60
+  scale; it budgets by the scene's pace now.
+- For developers: a much faster regression battery (6 routes of both games in ~100 s, was ~30 min), an interleaved
+  A/B performance test with a confidence interval, per-draw GPU timing and a frame time CSV (docs/DEPURACAO.md,
+  docs/PESQUISA-GPU.md).
+- Upgrading from 0.2.x: unzip over your install; no new setup (the game library is not rebuilt).
+
 ## 0.2.2 (2026-10-17)
 
 From the second patch in [issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1), thanks again to
