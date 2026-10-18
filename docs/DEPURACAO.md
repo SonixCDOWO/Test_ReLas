@@ -47,6 +47,10 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_EXP_VS_EARLY=<endereço>[:<pc, hex>]` | pesquisa: o vertex shader desse programa retorna no começo de `main`, ou antes da instrução no `pc` (o `pc` só existe no GLSL com `LARECOMP_SAVE_MSL=1`) |
 | `LARECOMP_GLSL_OVERRIDE_DIR=<pasta>` | pesquisa: `<pasta>/<endereço do vertex program, hex>_vs.glsl` substitui o GLSL gerado (parta de `build/glsl/`, gravado por `LARECOMP_SAVE_MSL=1`) |
 | `LARECOMP_NO_ROBUST=1` | pesquisa: desliga o `robustBufferAccess` do Vulkan |
+| `LARECOMP_VERTEX_READ=direct\|copy\|auto` | de onde a GPU lê vértices e índices dos draws: `direct` = no lugar, da memória do jogo importada (pelo PCIe numa placa discreta); `copy` = cópia em VRAM; `auto` (padrão) = cópia em placa discreta, no lugar em integrada. Faixas que um compute escreve ficam sempre no lugar ([PESQUISA-GPU.md](PESQUISA-GPU.md)). A linha de estatísticas traz `vertex ranges N copied, M in place` |
+| `LARECOMP_PIPE_STATS=<vertex program, hex>\|all` | o que o driver informa de cada shader compilado (registradores, spills, tamanho do código: `[pipestats]`) e o desenho dos atributos de vértice do programa (`VK_KHR_pipeline_executable_properties`) |
+| `LARECOMP_LOG_VCOPY=1` (com `LARECOMP_GPUPROF_AT`) | uma linha por cópia de stream de vértice nos quadros perfilados: bytes pedidos, tamanho do buffer ligado, stride, índice máximo |
+| `LARECOMP_LOG_GPUWRITES=1` | loga cada faixa de memória que um compute pode escrever (storage buffers ligados) ao entrar no conjunto |
 | `LARECOMP_HLE_WHO=<endereço falso, hex>[,...]` | no boot, imprime o nome da função do host por trás de um endereço `0x70800000xx` visto num `LARECOMP_THREAD_DUMP` |
 | `LARECOMP_LOCK_SPIN_US=<n>` | quanto uma thread espera girando por um mutex contendido antes de dormir (padrão 40; 0 = sempre dorme, como antes; desligado com menos de 4 processadores lógicos). Para comparar antes/depois no mesmo binário |
 | `tools/addr2sym.py <endereço> [-d <bytes>]` | módulo, símbolo mais próximo e disassembly de um endereço do guest |
@@ -68,7 +72,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_LOG_SKIN=1` (+ `LARECOMP_DEBUG_VSCB=1`) | detalha draws com esqueleto: vértices, índices/pesos dos ossos, estatística da paleta |
 | `LARECOMP_DUMP_SKIN=<n>` | grava as entradas do n-ésimo draw com esqueleto em `build/skin/` |
 | `LARECOMP_VK_UBO_DIRECT=1` | uniforms lidos direto da memória do jogo na GPU (experimento) |
-| `LARECOMP_VK_COPY_VERTICES=1` | copia vértices em vez de ler direto (experimento) |
+| `LARECOMP_VK_COPY_VERTICES=1` | força a cópia de **todos** os vértices e índices, até os que um compute escreve (podem ficar velhos); para o uso normal, `LARECOMP_VERTEX_READ` |
 | `LARECOMP_NO_SCALE=1` | desliga a escala de resolução interna |
 | `LARECOMP_SCALE=<f>` | altura de render = 1080 x f (ignora o launcher). Com `LARECOMP_FPS=0` mede a folga da GPU |
 | `LARECOMP_SETTINGS=<arquivo>` | outro `larecomp.ini` (ex.: `smaa = 0` para comparar sem SMAA) |
