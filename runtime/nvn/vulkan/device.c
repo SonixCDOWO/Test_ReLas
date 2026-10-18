@@ -467,7 +467,41 @@ void vk_frame_end(const char *shot_path) {
     }
 }
 
+// LARECOMP_SHOT_RAW=<file>: the numbered series (".../frame_NNNNN.png") goes to one raw file instead, no PNG encoding:
+// per frame a record of u32 frame number + 480x270 RGB (box-filtered), read by tools/bateria_scan.py. Several times faster
+// than PNGs (and ffmpeg) for a 900-frame route.
+#define RAW_W 480
+#define RAW_H 270
+static bool shot_raw(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h) {
+    static FILE *f; static int init;
+    if (!init) {
+        init = 1;
+        const char *e = getenv("LARECOMP_SHOT_RAW");
+        if (e && *e) { f = fopen(e, "wb"); if (f) setvbuf(f, NULL, _IOFBF, 1 << 20); else LOG("[vk] cannot open %s\n", e); }
+    }
+    const char *n = strstr(path, "frame_");
+    if (!f || !n) return false;
+    static uint8_t out[RAW_W * RAW_H * 3];
+    for (uint32_t y = 0; y < RAW_H; y++) {
+        uint32_t y0 = (uint64_t)y * h / RAW_H, y1 = (uint64_t)(y + 1) * h / RAW_H; if (y1 <= y0) y1 = y0 + 1;
+        for (uint32_t x = 0; x < RAW_W; x++) {
+            uint32_t x0 = (uint64_t)x * w / RAW_W, x1 = (uint64_t)(x + 1) * w / RAW_W; if (x1 <= x0) x1 = x0 + 1;
+            uint32_t s[3] = {0, 0, 0};
+            for (uint32_t yy = y0; yy < y1; yy++)
+                for (uint32_t xx = x0; xx < x1; xx++) { const uint8_t *p = rgba + ((uint64_t)yy * w + xx) * 4; s[0] += p[0]; s[1] += p[1]; s[2] += p[2]; }
+            uint32_t c = (y1 - y0) * (x1 - x0);
+            uint8_t *o = out + ((uint64_t)y * RAW_W + x) * 3;
+            o[0] = (uint8_t)(s[0] / c); o[1] = (uint8_t)(s[1] / c); o[2] = (uint8_t)(s[2] / c);
+        }
+    }
+    uint32_t fn = (uint32_t)atol(n + 6);
+    fwrite(&fn, 4, 1, f); fwrite(out, sizeof out, 1, f); fflush(f);  // (the game leaves with _exit)
+    if (getenv("LARECOMP_SHOT_RAW_LAST") && (long)fn >= atol(getenv("LARECOMP_SHOT_RAW_LAST"))) { LOG("[vk] raw frames done at %u\n", fn); fflush(stderr); _exit(0); }
+    return true;
+}
+
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h) {
+    if (shot_raw(path, rgba, w, h)) return;
     SDL_Surface *s = SDL_CreateSurfaceFrom((int)w, (int)h, SDL_PIXELFORMAT_ABGR8888, (void *)rgba, (int)w * 4);
     if (!s || !SDL_SavePNG(s, path)) LOG("[vk] saving %s failed: %s\n", path, SDL_GetError());
     else LOG("[vk] saved %s (%ux%u)\n", path, w, h);
