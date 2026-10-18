@@ -68,7 +68,8 @@ static const GameLibTables *open_lib(const char *path) {
     if (!entry) { snprintf(g_error, sizeof g_error, "%s: not game code", path); return NULL; }
     const GameLibTables *t = entry();
     if (!t || t->abi != GAMELIB_ABI || !t->id || strcmp(t->id, GAMELIB_ID)) {
-        snprintf(g_error, sizeof g_error, "%s was built for another version", path);
+        snprintf(g_error, sizeof g_error, "%s was built for another version (library: abi %u id %s; this runtime: abi %u id %s)", path,
+                 t ? t->abi : 0, t && t->id ? t->id : "-", (unsigned)GAMELIB_ABI, GAMELIB_ID);
         return NULL;  // (left loaded: nothing of it runs)
     }
     return t;
@@ -83,13 +84,20 @@ bool gamelib_load(const char *game_dir, char *why, size_t why_size) {
         int n = candidates(game_dir, c);
         const char *env = getenv("LARECOMP_GAME_LIB");
         for (int i = 0; i < n && !g_tables; i++) {
-            if (!exists(c[i])) continue;
             bool given = i == 0 && env && *env;  // LARECOMP_GAME_LIB: loaded as given, the library's own id decides
+            if (!exists(c[i])) {
+                if (given) { snprintf(g_error, sizeof g_error, "LARECOMP_GAME_LIB: no file %s", c[i]); break; }
+                continue;
+            }
             if (!given && !id_matches(c[i])) {
                 snprintf(g_error, sizeof g_error, "%s was built for another version", c[i]);
                 continue;
             }
             g_tables = open_lib(c[i]);
+            if (!g_tables) LOG("[gamelib] %s\n", g_error);
+            // (the library asked for by name doesn't load: stop there. Falling back to the next candidate ran another
+            // game's code - Eevee's build/lasgame.dll with Pikachu's files - and crashed far from the cause)
+            if (!g_tables && given) break;
             if (g_tables)
                 for (uint32_t m = 0; m < g_tables->nmods; m++)
                     LOG("[gamelib] %s: %s, %llu functions\n", c[i], g_tables->mods[m].name,
