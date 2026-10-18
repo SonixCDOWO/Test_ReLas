@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 (2026-10-18)
+
+- **Fixes a broken map after a capture (found playing 0.3.0 with 60 fps on).** After entering and leaving a capture, the world
+  could look wrong until you changed area: fences, signs and ferns flat and dark, grey patches on the ground. The cause is
+  **not found yet**; it showed up with either new 0.3.0 option on (the render thread, or reading models from video memory)
+  and not in the runs with both off (not a proof it can never happen with both off: a handful of encounters each). So the
+  two options are **off by default again**: the game runs as in 0.2.2, plus the mutex change and the fixes of 0.3.0.
+  The 0.3.0 measurements (about 45% more uncapped frames per second with both on) stay true for the Pewter City route,
+  but that route does not include a capture.
+- To try them anyway: `exp_render_thread = 1` and `exp_vertex_vram = 1` in `larecomp.ini` (the keys of 0.3.0 are
+  ignored on purpose, so an ini saved by 0.3.0 does not keep them on).
+- Upgrading from 0.3.0 or 0.2.x: unzip over your install.
+
 ## 0.3.0 (2026-10-18)
 
 A performance release. Everything below was measured on one machine (Core i5-14600KF, RTX 3080, Windows 11), with

@@ -212,6 +212,13 @@ void input_handle_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
         if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_F9 && !e->key.repeat) g_debug_frame_request = 1;
+        // research (broken map after a capture): F5 marks all guest memory written (every texture re-checks its data), F6 reads
+        // all vertex and index data in place from now on
+        if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && getenv("LARECOMP_HEAL_KEYS")) {
+            extern volatile int g_heal_tex, g_heal_vtx;
+            if (e->key.scancode == SDL_SCANCODE_F5) { g_heal_tex = 1; LOG("[heal] F5: textures re-checked\n"); }
+            if (e->key.scancode == SDL_SCANCODE_F6) { g_heal_vtx = 1; LOG("[heal] F6: vertex data in place\n"); }
+        }
         if (e->key.scancode < SDL_SCANCODE_COUNT) keys_down[e->key.scancode] = e->type == SDL_EVENT_KEY_DOWN;
         recompute_keyboard();
         break;

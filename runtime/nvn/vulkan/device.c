@@ -535,6 +535,11 @@ void backend_represent(void) {
 }
 
 void backend_present(NvnTexture *t) {
+    {   // (LARECOMP_HEAL_KEYS research key F5: every texture re-checks its memory)
+        extern volatile int g_heal_tex;
+        extern void backend_pool_written(uint64_t addr, uint64_t size);
+        if (g_heal_tex) { g_heal_tex = 0; backend_pool_written(0x7000000000ull, 0x320000000ull); }
+    }
     g_last_presented = t;
     TexBackend *b = vk_tex(t, true);
     b->presented = true;

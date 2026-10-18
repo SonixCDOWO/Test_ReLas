@@ -25,8 +25,8 @@ Settings g_settings = {
     .reverb = true,
     .movie_audio = true,
     .show_fps = false,
-    .render_thread = true,
-    .vertex_read = VREAD_AUTO,
+    .render_thread = false,  // (experimental: a map broke after captures with it on, docs/HISTORICO.md 60)
+    .vertex_read = VREAD_DIRECT,
     .upscaler = UPSCALE_SHARP,
     .antialias = AA_SMAA,  // (the game has no anti-aliasing of its own)
 };
@@ -70,8 +70,9 @@ void settings_load(void) {
         else if (!strcmp(key, "upscaler")) g_settings.upscaler = !strcmp(val, "bilinear") ? UPSCALE_BILINEAR : UPSCALE_SHARP;
         // (an older "antialias = off" was only LAS Recomp's default being saved: a new key, so SMAA starts on)
         else if (!strcmp(key, "smaa")) g_settings.antialias = atoi(val) != 0 ? AA_SMAA : AA_OFF;
-        else if (!strcmp(key, "render_thread")) g_settings.render_thread = atoi(val) != 0;
-        else if (!strcmp(key, "vertex_read")) g_settings.vertex_read = !strcmp(val, "direct") ? VREAD_DIRECT : !strcmp(val, "copy") ? VREAD_COPY : VREAD_AUTO;
+        // (new names: 0.3.0 saved render_thread = 1 / vertex_read = auto, which must not carry over)
+        else if (!strcmp(key, "exp_render_thread")) g_settings.render_thread = atoi(val) != 0;
+        else if (!strcmp(key, "exp_vertex_vram")) g_settings.vertex_read = atoi(val) != 0 ? VREAD_AUTO : VREAD_DIRECT;
         else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
         else if (!strcmp(key, "wild_battle")) g_settings.wild_battle = atoi(val) != 0;
         else bind_settings_load(key, val);  // bind_pad_* / bind_key_*: runtime/hle/bindings.c
@@ -86,17 +87,17 @@ void settings_save(void) {
     FILE *f = fopen(SETTINGS_FILE, "w");
     if (!f) { LOG("[settings] cannot write %s\n", SETTINGS_FILE); return; }
     fprintf(f, "# " RT_APP_NAME " settings (set on the start screen)\n");
-    fprintf(f, "fullscreen = %d\n", g_settings.fullscreen);
-    fprintf(f, "fps = %d\n", g_settings.fps);
-    fprintf(f, "render_height = %d\n", g_settings.res_height);
-    fprintf(f, "smaa = %d\n", g_settings.antialias == AA_SMAA);
+    fprintf(f, "fullscreen = %d", g_settings.fullscreen);
+    fprintf(f, "fps = %d", g_settings.fps);
+    fprintf(f, "render_height = %d", g_settings.res_height);
+    fprintf(f, "smaa = %d", g_settings.antialias == AA_SMAA);
     fprintf(f, "mod = %s\n", g_settings.mod);
     fprintf(f, "mouse_sens = %.3f\n", g_settings.mouse_sens);
     fprintf(f, "stick_deadzone = %.2f\n", g_settings.stick_deadzone);
     fprintf(f, "volume = %.2f\n", g_settings.volume);
-    fprintf(f, "reverb = %d\n", g_settings.reverb);
-    fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
-    fprintf(f, "show_fps = %d\n", g_settings.show_fps);
+    fprintf(f, "reverb = %d", g_settings.reverb);
+    fprintf(f, "movie_audio = %d", g_settings.movie_audio);
+    fprintf(f, "show_fps = %d", g_settings.show_fps);
     fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
     if (g_settings.res_mode == RES_DYNAMIC) fprintf(f, "resolution = dynamic\n");
     else if (g_settings.res_mode == RES_Q75) fprintf(f, "resolution = 75%%\n");
@@ -104,10 +105,10 @@ void settings_save(void) {
     else if (g_settings.res_mode == RES_Q50) fprintf(f, "resolution = 50%%\n");
     else if (g_settings.res_mode >= 1 && g_settings.res_mode <= 8) fprintf(f, "resolution = %dx\n", g_settings.res_mode);
     else fprintf(f, "resolution = match\n");
-    fprintf(f, "render_thread = %d\n", g_settings.render_thread);
-    fprintf(f, "vertex_read = %s\n", g_settings.vertex_read == VREAD_DIRECT ? "direct" : g_settings.vertex_read == VREAD_COPY ? "copy" : "auto");
-    fprintf(f, "dpad_move = %d\n", g_settings.dpad_move);
-    fprintf(f, "wild_battle = %d\n", g_settings.wild_battle);
+    fprintf(f, "exp_render_thread = %d\n", g_settings.render_thread);
+    fprintf(f, "exp_vertex_vram = %d\n", g_settings.vertex_read != VREAD_DIRECT);
+    fprintf(f, "dpad_move = %d", g_settings.dpad_move);
+    fprintf(f, "wild_battle = %d", g_settings.wild_battle);
     fprintf(f, "game_lang = %s\n", g_settings.game_lang);
     bind_settings_save(f);
     fclose(f);
