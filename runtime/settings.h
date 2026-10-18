@@ -7,6 +7,7 @@ enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25
 enum { UPSCALE_BILINEAR = 0, UPSCALE_FSR1 = 2 /* AMD FSR 1 */ };
 #define UPSCALE_SHARP UPSCALE_FSR1  // the non-bilinear upscaler (the default)
 enum { AA_OFF = 0, AA_SMAA = 1 };
+enum { VREAD_AUTO = 0, VREAD_COPY = 1, VREAD_DIRECT = 2 };
 
 typedef struct {
     bool fullscreen;
@@ -22,6 +23,8 @@ typedef struct {
     bool movie_audio;
     bool show_fps;
     bool dpad_move;      // the d-pad (and arrow keys) move the player like the stick
+    bool render_thread;  // the backend runs on its own thread (runtime/nvn/vulkan/renderthread.c); default on
+    int vertex_read;     // VREAD_*: where the GPU reads vertex and index data (runtime/nvn/vulkan/exec.c)
     bool wild_battle;    // touching a wild Pokémon starts a battle, then the capture (runtime/hle/wildbattle.c)
     char game_lang[8];   // the game's language code ("en-US", "es"...: runtime/mods.c game_language)
     char mod[128];       // active mod / fan translation (mods/<name>/), empty = none (runtime/mods.h)

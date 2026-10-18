@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "../../rt.h"
+#include "../../settings.h"
 #include "../nvn.h"
 
 void vk_wait_seq(uint64_t seq);                    // exec.c
@@ -59,7 +60,7 @@ bool rt_active(void) {
     static int on = -1;
     if (on < 0) {
         const char *e = getenv("LARECOMP_RENDER_THREAD");
-        on = e ? atoi(e) != 0 : 0;
+        on = e ? atoi(e) != 0 : g_settings.render_thread;  // (the environment wins over larecomp.ini)
         if (getenv("LARECOMP_INTERP")) on = 0;  // (research: the interpolation replays lists on the game thread)
         if (on) LOG("[rt] render thread on\n");
     }

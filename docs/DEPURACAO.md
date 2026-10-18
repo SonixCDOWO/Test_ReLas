@@ -48,6 +48,9 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_GLSL_OVERRIDE_DIR=<pasta>` | pesquisa: `<pasta>/<endereço do vertex program, hex>_vs.glsl` substitui o GLSL gerado (parta de `build/glsl/`, gravado por `LARECOMP_SAVE_MSL=1`) |
 | `LARECOMP_NO_ROBUST=1` | pesquisa: desliga o `robustBufferAccess` do Vulkan |
 | `LARECOMP_VERTEX_READ=direct\|copy\|auto` | de onde a GPU lê vértices e índices dos draws: `direct` = no lugar, da memória do jogo importada (pelo PCIe numa placa discreta); `copy` = cópia em VRAM; `auto` (padrão) = cópia em placa discreta, no lugar em integrada. Faixas que um compute escreve ficam sempre no lugar ([PESQUISA-GPU.md](PESQUISA-GPU.md)). A linha de estatísticas traz `vertex ranges N copied, M in place` |
+| `LARECOMP_RENDER_THREAD=0\|1` | a thread de renderização do backend Vulkan (padrão ligada; `render_thread = 0` no `larecomp.ini` também desliga). `LARECOMP_INTERP` a desliga. `vertex_read = auto\|copy\|direct` no ini é o equivalente de `LARECOMP_VERTEX_READ` |
+| `LARECOMP_SHOT_RAW=<arquivo>` + `LARECOMP_SHOT_RAW_LAST=<quadro>` | a série `LARECOMP_SCREENSHOT_EVERY/FROM` vai para um arquivo cru (480x270 RGB por quadro, sem PNG) e o jogo sai no último quadro; lido por `tools/bateria_scan.py` |
+| `LARECOMP_EXIT_AT_PRESENT=<n>` | com `LARECOMP_FRAMETIME_CSV`, sai no presente n; usado por `tools/perf_ab.py` |
 | `LARECOMP_PIPE_STATS=<vertex program, hex>\|all` | o que o driver informa de cada shader compilado (registradores, spills, tamanho do código: `[pipestats]`) e o desenho dos atributos de vértice do programa (`VK_KHR_pipeline_executable_properties`) |
 | `LARECOMP_LOG_VCOPY=1` (com `LARECOMP_GPUPROF_AT`) | uma linha por cópia de stream de vértice nos quadros perfilados: bytes pedidos, tamanho do buffer ligado, stride, índice máximo |
 | `LARECOMP_LOG_GPUWRITES=1` | loga cada faixa de memória que um compute pode escrever (storage buffers ligados) ao entrar no conjunto |

@@ -404,6 +404,7 @@ static bool ring_gpu_enabled(void) {
     static int on = -1;
     if (on < 0) {
         const char *e = getenv("LARECOMP_VERTEX_READ");
+        if (!e) e = g_settings.vertex_read == VREAD_DIRECT ? "direct" : g_settings.vertex_read == VREAD_COPY ? "copy" : NULL;
         if (e && !strcmp(e, "direct")) on = 0;
         else if (e && (!strcmp(e, "copy") || !strcmp(e, "hybrid"))) on = 1;
         else on = g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;

@@ -25,6 +25,8 @@ Settings g_settings = {
     .reverb = true,
     .movie_audio = true,
     .show_fps = false,
+    .render_thread = true,
+    .vertex_read = VREAD_AUTO,
     .upscaler = UPSCALE_SHARP,
     .antialias = AA_SMAA,  // (the game has no anti-aliasing of its own)
 };
@@ -68,6 +70,8 @@ void settings_load(void) {
         else if (!strcmp(key, "upscaler")) g_settings.upscaler = !strcmp(val, "bilinear") ? UPSCALE_BILINEAR : UPSCALE_SHARP;
         // (an older "antialias = off" was only LAS Recomp's default being saved: a new key, so SMAA starts on)
         else if (!strcmp(key, "smaa")) g_settings.antialias = atoi(val) != 0 ? AA_SMAA : AA_OFF;
+        else if (!strcmp(key, "render_thread")) g_settings.render_thread = atoi(val) != 0;
+        else if (!strcmp(key, "vertex_read")) g_settings.vertex_read = !strcmp(val, "direct") ? VREAD_DIRECT : !strcmp(val, "copy") ? VREAD_COPY : VREAD_AUTO;
         else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
         else if (!strcmp(key, "wild_battle")) g_settings.wild_battle = atoi(val) != 0;
         else bind_settings_load(key, val);  // bind_pad_* / bind_key_*: runtime/hle/bindings.c
@@ -100,6 +104,8 @@ void settings_save(void) {
     else if (g_settings.res_mode == RES_Q50) fprintf(f, "resolution = 50%%\n");
     else if (g_settings.res_mode >= 1 && g_settings.res_mode <= 8) fprintf(f, "resolution = %dx\n", g_settings.res_mode);
     else fprintf(f, "resolution = match\n");
+    fprintf(f, "render_thread = %d\n", g_settings.render_thread);
+    fprintf(f, "vertex_read = %s\n", g_settings.vertex_read == VREAD_DIRECT ? "direct" : g_settings.vertex_read == VREAD_COPY ? "copy" : "auto");
     fprintf(f, "dpad_move = %d\n", g_settings.dpad_move);
     fprintf(f, "wild_battle = %d\n", g_settings.wild_battle);
     fprintf(f, "game_lang = %s\n", g_settings.game_lang);
