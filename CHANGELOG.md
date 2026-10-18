@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.2 (2026-10-18)
+
+- **Fixes the launcher forgetting your settings** (0.3.1): it saved `larecomp.ini` with some lines run together, so
+  the next start went back to the defaults for 60 fps, the resolution, anti-aliasing, the translation, movie audio,
+  the fps counter, the d-pad and wild battles. Fixed, and a file saved by 0.3.1 is read correctly: tested with one,
+  every setting came back.
+- **Game folders with accents or other non-Latin letters work** (for example a Windows user folder named with an
+  accent). Tested with a folder named in Cyrillic and Portuguese letters: 0.3.1 could not open the game there, 0.3.2
+  runs it.
+- **Less memory reserved**: the game's threads no longer commit 256 MB of stack each up front. Pewter City, Eevee:
+  committed memory 7.2-7.4 GB -> 4.7 GB; the memory actually in use is unchanged. Helps on PCs with little RAM or a
+  small page file.
+- **Less GPU time**: fragment and compute shaders unpack half-precision values natively. RTX 3080, Pewter City at 2x
+  resolution: 4.0 -> 3.75 ms of GPU per frame (the frame rate at the game's 30 fps does not change on this machine).
+  Frames look the same.
+- Fixes from LAS Recomp, the project this port is built on: render passes no longer hand empty color slots to the
+  driver (they crash Intel UHD 630 drivers there; not tested here on Intel), a GPU fence race, duplicate pipelines,
+  and shader instruction details. A rare crash when two game threads touch new memory at the same moment is fixed
+  too (found in another port of the same runtime; not seen in Let's Go).
+- After a crash, no extra "Visual C++ Runtime Library" box. A controller Windows does not recognise can be added with
+  your own SDL mapping line in `gamecontrollerdb.txt` next to the exe.
+- Tested with Eevee and Pikachu 1.0.0 on the regression routes (world, menus, area change) and a save from the menu.
+- Upgrading: unzip over your install (no new setup).
+
 ## 0.3.1 (2026-10-18)
 
 - **Fixes the world breaking after a capture** (found playing 0.3.0 with 60 fps on): after entering and leaving a
