@@ -480,10 +480,10 @@ static void fill_state(Cpu *c) {
     const uint64_t zr = 1ull << BTN_ZR;  // (the controller's ZR is its finger on the touch screen: pad_finger)
     uint64_t b = menu ? script_buttons & ~zr : key_buttons | ((pad_buttons | script_buttons) & ~zr) | mouse_buttons;
     {   // injected Plus: held for ~10 presented frames (the game polls several times per frame)
-        extern uint64_t renderer_present_count(void);
+        extern uint64_t renderer_game_frame(void);
         static uint64_t until;
-        if (g_inject_plus > 0) { until = renderer_present_count() + 10; g_inject_plus = 0; }
-        if (renderer_present_count() < until) b |= 1ull << BTN_PLUS;
+        if (g_inject_plus > 0) { until = renderer_game_frame() + 10; g_inject_plus = 0; }
+        if (renderer_game_frame() < until) b |= 1ull << BTN_PLUS;
     }
     int32_t lx = clamp_axis((menu ? 0 : key_lx + pad_lx) + script_lx), ly = clamp_axis((menu ? 0 : key_ly + pad_ly) + script_ly);
     int32_t rx = clamp_axis((menu ? 0 : key_rx + pad_rx) + script_rx), ry = clamp_axis((menu ? 0 : key_ry + pad_ry) + script_ry);
@@ -586,8 +586,8 @@ static bool touch_now(int32_t *x, int32_t *y) {
             if (seg[nseg].from > 0) nseg++;
         }
     }
-    extern uint64_t renderer_present_count(void);
-    uint64_t f = renderer_present_count();
+    extern uint64_t renderer_game_frame(void);
+    uint64_t f = renderer_game_frame();
     for (int i = 0; i < nseg; i++) {
         if (f < (uint64_t)seg[i].from || f > (uint64_t)seg[i].to) continue;
         double t = (double)(f - seg[i].from), k = seg[i].to > seg[i].from ? t / (seg[i].to - seg[i].from) : 1;
@@ -643,8 +643,8 @@ static void touch_caller_log(const char *what, uint64_t lr) {  // (LARECOMP_TOUC
     if (!on) return;
     for (int i = 0; i < n; i++) if (seen[i] == lr) return;
     if (n < 32) seen[n++] = lr;
-    extern uint64_t renderer_present_count(void);
-    LOG("[touch] %s read from lr %llx (frame %llu)\n", what, (unsigned long long)lr, (unsigned long long)renderer_present_count());
+    extern uint64_t renderer_game_frame(void);
+    LOG("[touch] %s read from lr %llx (frame %llu)\n", what, (unsigned long long)lr, (unsigned long long)renderer_game_frame());
 }
 HLE_FUNC("_ZN2nn3hid20GetTouchScreenStatesILm16EEEiPNS0_16TouchScreenStateIXT_EEEi", hid_touch_states) {
     touch_caller_log("touch screen", c->x[30]);
@@ -705,11 +705,11 @@ static void gesture_emit(uint32_t type, uint32_t dir, int32_t x, int32_t y, int3
 }
 // Once per presented frame (the game may poll several times): the finger's new sample -> gesture events.
 static void gesture_update(void) {
-    extern uint64_t renderer_present_count(void);
+    extern uint64_t renderer_game_frame(void);
     static uint64_t frame = ~0ull, start_ns, last_ns;
     static bool was, moved, pressed;
     static int32_t sx, sy, lx, ly;
-    uint64_t f = renderer_present_count();
+    uint64_t f = renderer_game_frame();
     if (f == frame) return;
     frame = f;
     int32_t x, y;
@@ -838,20 +838,20 @@ HLE_FUNC("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_
     gyro_yaw = gyro_pitch = 0;
     atomic_store(&mouse_acc_x, 0);
     atomic_store(&mouse_acc_y, 0);
-    extern uint64_t renderer_present_count(void);
-    LOG("[input] six-axis sensor started (frame %llu)\n", (unsigned long long)renderer_present_count());
+    extern uint64_t renderer_game_frame(void);
+    LOG("[input] six-axis sensor started (frame %llu)\n", (unsigned long long)renderer_game_frame());
 }
 HLE_FUNC("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_six_axis_stop) {
     gyro_aiming = 0;
-    extern uint64_t renderer_present_count(void);
-    if (getenv("LARECOMP_GYRO_TEST")) LOG("[input] six-axis sensor stopped (frame %llu)\n", (unsigned long long)renderer_present_count());
+    extern uint64_t renderer_game_frame(void);
+    if (getenv("LARECOMP_GYRO_TEST")) LOG("[input] six-axis sensor stopped (frame %llu)\n", (unsigned long long)renderer_game_frame());
 }
 static void six_axis_log(Cpu *c) {  // (LARECOMP_GYRO_TEST: when the game reads it, and from where)
     static int on = -1;
     if (on < 0) on = getenv("LARECOMP_GYRO_TEST") != NULL;
-    extern uint64_t renderer_present_count(void);
+    extern uint64_t renderer_game_frame(void);
     static uint64_t last, n;
-    uint64_t f = renderer_present_count();
+    uint64_t f = renderer_game_frame();
     n++;
     if (on && (n <= 8 || f / 30 != last / 30))
         LOG("[gyro] read #%llu at frame %llu (lr %llx)\n", (unsigned long long)n, (unsigned long long)f, (unsigned long long)c->x[30]);

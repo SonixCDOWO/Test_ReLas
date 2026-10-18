@@ -113,10 +113,10 @@ NVN(nvnQueueResetMemoryUsageCounts) { (void)c; }
 NVN(nvnQueueSubmitCommands) {
     int n = (int)A(1);
     const uint64_t *handles = AP(2);
-    for (int i = 0; i < n; i++) backend_execute(handles[i]);
+    for (int i = 0; i < n; i++) rt_submit(handles[i]);
 }
 NVN(nvnQueueFlush) { (void)c; }
-NVN(nvnQueueFinish) { (void)c; renderer_sync(); }
+NVN(nvnQueueFinish) { (void)c; rt_drain(); renderer_sync(); }
 
 static NvnSync *sync_of(uint64_t guest) {
     NvnSync *s = HOST(NvnSync, guest);
@@ -125,8 +125,13 @@ static NvnSync *sync_of(uint64_t guest) {
 }
 uint64_t renderer_fence_seq(void);
 void renderer_wait_seq(uint64_t seq);
-NVN(nvnQueueFenceSync) { NvnSync *s = sync_of(A(1)); s->signaled = 1; s->seq = renderer_fence_seq(); }
-void nvn_sync_set_seq(uint64_t guest, uint64_t seq) { NvnSync *s = sync_of(guest); s->signaled = 1; s->seq = seq; }
+NVN(nvnQueueFenceSync) {
+    NvnSync *s = sync_of(A(1));
+    s->signaled = 1;
+    if (rt_active()) { s->seq = 0; s->ticket = rt_fence_ticket(); }  // (the jobs queued so far; the GPU seq is theirs once they have run)
+    else { s->ticket = 0; s->seq = renderer_fence_seq(); }
+}
+void nvn_sync_set_seq(uint64_t guest, uint64_t seq) { NvnSync *s = sync_of(guest); s->signaled = 1; s->ticket = 0; s->seq = seq; }  // (a fence inside a list: runs on the render thread)
 NVN(nvnQueueWaitSync) { RET(1); }
 
 // ================================================================== sync / event
@@ -141,9 +146,13 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
     if (getenv("LARECOMP_LOG_SYNC") && n++ % 60 == 0) LOG("[nvn] SyncWait #%llu (lr %llx)\n", (unsigned long long)n, c->x[30]);
     static int whole = -1;  // LARECOMP_SYNC_ALL=1: old behaviour, wait for all submitted work
     if (whole < 0) whole = getenv("LARECOMP_SYNC_ALL") ? 1 : 0;
-    if (flush) renderer_flush();
-    else if (whole) renderer_sync();
-    else renderer_wait_seq(sync_of(A(0))->seq);  // only the submission that holds this fence
+    if (flush) { rt_drain(); renderer_flush(); }
+    else if (whole) { rt_drain(); renderer_sync(); }
+    else {
+        NvnSync *s = sync_of(A(0));
+        if (s->ticket) rt_wait_ticket(s->ticket);  // only the work up to this fence
+        else { if (s->seq) rt_drain(); renderer_wait_seq(s->seq); }  // (a fence inside a list is set once the list has run)
+    }
     RET(0);
 }
 NVN(nvnSyncCreateGLSync) { RET(0); }
@@ -190,7 +199,7 @@ NVN(nvnMemoryPoolInitialize) {
 }
 // Objects the game destroys (frame interpolation, exec.c: a recorded frame that may reference them is not replayed)
 uint64_t g_nvn_destroyed;
-NVN(nvnMemoryPoolFinalize) { g_nvn_destroyed++; free(HOST(NvnPool, A(0))); SET_HOST(A(0), 0); }
+NVN(nvnMemoryPoolFinalize) { g_nvn_destroyed++; rt_drain(); free(HOST(NvnPool, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnMemoryPoolSetDebugLabel) { (void)c; }
 NVN(nvnMemoryPoolMap) { RET(HOST(NvnPool, A(0))->storage); }
 NVN(nvnMemoryPoolGetBufferAddress) { RET(HOST(NvnPool, A(0))->storage); }  // GPU address == CPU address
@@ -364,10 +373,11 @@ NVN(nvnTextureInitialize) {
     SET_HOST(A(0), t);
     RET(1);
 }
+static void texture_destroy_on_render_thread(void *t) { backend_texture_destroyed(t); }
 NVN(nvnTextureFinalize) {
     g_nvn_destroyed++;
     NvnTexture *t = HOST(NvnTexture, A(0));
-    if (t) { backend_texture_destroyed(t); free(t); }
+    if (t) { rt_call(texture_destroy_on_render_thread, t); free(t); }
     SET_HOST(A(0), 0);
 }
 NVN(nvnTextureSetDebugLabel) {
@@ -560,7 +570,7 @@ NvnDescPool *nvn_find_pool(NvnDescPool **reg, uint64_t guest_pool) {
 
 // ================================================================== programs
 NVN(nvnProgramInitialize) { SET_HOST(A(0), calloc(1, sizeof(NvnProgram))); RET(1); }
-NVN(nvnProgramFinalize) { g_nvn_destroyed++; free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
+NVN(nvnProgramFinalize) { g_nvn_destroyed++; rt_drain(); free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnProgramSetDebugLabel) { (void)c; }
 NVN(nvnProgramSetSampleShading) { (void)c; }
 NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
@@ -696,7 +706,7 @@ NVN(nvnQueuePresentTexture) {
     g_last_interval = w->interval;
     { extern void fps60_present(void); fps60_present(); }
     present_pace(w->interval);
-    if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
+    if (i >= 0 && i < w->num) rt_present(HOST(NvnTexture, w->textures[i]));
 }
 
 // ================================================================== small state objects

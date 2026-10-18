@@ -402,8 +402,8 @@ static void trace_draw(Cpu *c, uint64_t count) {
     static int n;
     if (n++ > 4000) return;
     if (g_ntrace_cb < 16) g_trace_cb[g_ntrace_cb++] = c->x[0];
-    extern uint64_t renderer_present_count(void);
-    LOG("[trace] f%llu draw count %llu lr %llx chain:", (unsigned long long)renderer_present_count(), (unsigned long long)count, (unsigned long long)c->x[30]);
+    extern uint64_t renderer_game_frame(void);
+    LOG("[trace] f%llu draw count %llu lr %llx chain:", (unsigned long long)renderer_game_frame(), (unsigned long long)count, (unsigned long long)c->x[30]);
     uint64_t fp = c->x[29];
     for (int i = 0; i < 14 && fp >= 0x7000000000ull && fp < 0x8000000000ull && (fp & 7) == 0; i++) {
         uint64_t next = *(uint64_t *)(uintptr_t)fp, lr = *(uint64_t *)(uintptr_t)(fp + 8);
@@ -424,16 +424,16 @@ static bool chains_on(void) {
         from = e ? atol(e) : -1;
         to = e && strchr(e, '-') ? atol(strchr(e, '-') + 1) : from;
     }
-    extern uint64_t renderer_present_count(void);
-    long f = (long)renderer_present_count();
+    extern uint64_t renderer_game_frame(void);
+    long f = (long)renderer_game_frame();
     return from >= 0 && f >= from && f <= to;
 }
 static void draw_chain(Cpu *c, const char *kind, uint64_t count) {
     if (!chains_on()) return;
-    extern uint64_t renderer_present_count(void);
+    extern uint64_t renderer_game_frame(void);
     static int n;
     char line[512];
-    int len = snprintf(line, sizeof line, "[chain] f%llu %d %s %llu cb %llx tag %llx:", (unsigned long long)renderer_present_count(),
+    int len = snprintf(line, sizeof line, "[chain] f%llu %d %s %llu cb %llx tag %llx:", (unsigned long long)renderer_game_frame(),
                        n++, kind, (unsigned long long)count, (unsigned long long)c->x[0], (unsigned long long)g_obj_tag);
     uint64_t fp = c->x[29];
     len += snprintf(line + len, sizeof line - len, " %llx", (unsigned long long)c->x[30]);
@@ -546,8 +546,8 @@ NVN(nvnCommandBufferCallCommands) {
         const uint64_t *h = (const uint64_t *)(uintptr_t)A(2);
         for (uint64_t i = 0; i < A(1); i++)
             if (trace_list(h[i])) {
-                extern uint64_t renderer_present_count(void);
-                LOG("[trace] f%llu call list %llx lr %llx chain:", (unsigned long long)renderer_present_count(), (unsigned long long)h[i],
+                extern uint64_t renderer_game_frame(void);
+                LOG("[trace] f%llu call list %llx lr %llx chain:", (unsigned long long)renderer_game_frame(), (unsigned long long)h[i],
                     (unsigned long long)c->x[30]);
                 trace_chain(c);
             }
