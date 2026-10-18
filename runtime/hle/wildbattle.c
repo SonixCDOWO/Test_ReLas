@@ -27,7 +27,7 @@
 void rt_register_fnhook(uint64_t addr, int (*fn)(Cpu *c, uint64_t addr));  // runtime/fnhook.c
 void rt_call_original(Cpu *c, uint64_t addr);
 uint64_t rt_addr(uint64_t eevee);  // runtime/fnhook.c: an Eevee 1.0.0 address in the running build (0: unknown build)
-uint64_t renderer_present_count(void);
+uint64_t renderer_game_frame(void);
 
 #define ENCOUNTER_TRIGGER 0x7000305ad0ull  // a touched wild Pokémon (x0 = it, x1 -> the world's object): starts the capture
 #define GOT_ALLOCATOR 0x70015faab8ull      // GOT slot -> pointer to the object holding the allocator at +0x68
@@ -102,13 +102,13 @@ static int logpoke_hook(Cpu *c, uint64_t addr) {
     g_wild_valid = true;
     if (!getenv("LARECOMP_WILDBATTLE_LOGPOKE")) return 0;
     LOG("[wild] f%llu builder: P %llx species %llu form %llu | +f0c %u +f10 %u +f12 %u | +f18..f2c %d %d %d %d %d %d | +40c %u +410 %u\n",
-        (unsigned long long)renderer_present_count(), (unsigned long long)p, (unsigned long long)species, (unsigned long long)form,
+        (unsigned long long)renderer_game_frame(), (unsigned long long)p, (unsigned long long)species, (unsigned long long)form,
         R8(p, 0xf0c), (unsigned)(*(volatile uint16_t *)(uintptr_t)(p + 0xf10)), (unsigned)(*(volatile uint16_t *)(uintptr_t)(p + 0xf12)),
         (int8_t)R8(p, 0xf18), (int8_t)R8(p, 0xf1c), (int8_t)R8(p, 0xf20), (int8_t)R8(p, 0xf24), (int8_t)R8(p, 0xf28), (int8_t)R8(p, 0xf2c),
         R32(p, 0x40c), R8(p, 0x410));
     if (atoi(getenv("LARECOMP_WILDBATTLE_LOGPOKE")) >= 2) {   // the whole object, to find where the level lives by comparing with the capture screen (build/poke_<present>.bin)
         char path[96];
-        snprintf(path, sizeof path, "build/poke_%llu.bin", (unsigned long long)renderer_present_count());
+        snprintf(path, sizeof path, "build/poke_%llu.bin", (unsigned long long)renderer_game_frame());
         FILE *f = fopen(path, "wb");
         if (f) { fwrite((const void *)(uintptr_t)p, 1, 0x1100, f); fclose(f); }
     }
@@ -123,7 +123,7 @@ static int build_hook(Cpu *c, uint64_t addr) {
     memcpy(g_cfg, (const void *)(uintptr_t)cfg, CFG_SIZE);
     g_cfg_valid = true;
     LOG("[wild] f%llu wild Pokémon's configuration %llx kept: species word +0x58 = %u, +0x54 = %u\n",
-        (unsigned long long)renderer_present_count(), (unsigned long long)cfg, *(const uint32_t *)(g_cfg + 0x58), *(const uint32_t *)(g_cfg + 0x54));
+        (unsigned long long)renderer_game_frame(), (unsigned long long)cfg, *(const uint32_t *)(g_cfg + 0x58), *(const uint32_t *)(g_cfg + 0x54));
     return 1;
 }
 
@@ -181,7 +181,7 @@ static int trigger_hook(Cpu *c, uint64_t addr) {
     uint64_t mgr = R64(R64(c->x[1], 0), 0x68);
     uint64_t alloc = R64(R64(R64(GOT_ALLOCATOR, 0), 0), 0x68);
     LOG("[wild] f%llu encounter intercepted (pokemon obj %llx, manager %llx, allocator %llx): building the static battle process\n",
-        (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0], (unsigned long long)mgr, (unsigned long long)alloc);
+        (unsigned long long)renderer_game_frame(), (unsigned long long)c->x[0], (unsigned long long)mgr, (unsigned long long)alloc);
     uint64_t out[2] = {0, 0};
     g_pending = true;
     g_active = true;
@@ -210,8 +210,8 @@ static DWORD WINAPI debug_thread(LPVOID unused) {
     (void)unused;
     for (;;) {
         Sleep(50);
-        if (g_dbg_frame && (long)renderer_present_count() >= g_dbg_frame + 240) {
-            LOG("[wild] f%llu debug dump requested\n", (unsigned long long)renderer_present_count());
+        if (g_dbg_frame && (long)renderer_game_frame() >= g_dbg_frame + 240) {
+            LOG("[wild] f%llu debug dump requested\n", (unsigned long long)renderer_game_frame());
             g_debug_frame_request = 1;
             g_dbg_frame = 0;
         }
@@ -234,7 +234,7 @@ static int g_fadein_delay = 30, g_fadein_frames = 10;
 static bool g_fadein_done = true;
 
 static int fade_log_hook(Cpu *c, uint64_t addr) {
-    LOG("[wild] f%llu fade %s: x1 %llx x2(type) %llx x3 %llx x4 %llx x5 %llx\n", (unsigned long long)renderer_present_count(),
+    LOG("[wild] f%llu fade %s: x1 %llx x2(type) %llx x3 %llx x4 %llx x5 %llx\n", (unsigned long long)renderer_game_frame(),
         addr == rt_addr(FADE_IN_FN) ? "in " : "out", (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3],
         (unsigned long long)c->x[4], (unsigned long long)c->x[5]);
     if (addr == rt_addr(FADE_OUT_FN)) { g_fade_type = (int)c->x[2]; g_fade_seen = 1; }
@@ -243,7 +243,7 @@ static int fade_log_hook(Cpu *c, uint64_t addr) {
 
 static int field_hook(Cpu *c, uint64_t addr) {
     (void)addr;
-    if (!g_fadein_done && g_end_frame && (long)renderer_present_count() >= g_end_frame + g_fadein_delay) {
+    if (!g_fadein_done && g_end_frame && (long)renderer_game_frame() >= g_end_frame + g_fadein_delay) {
         g_fadein_done = true;
         uint64_t save[32], lr = c->x[30], sp = c->sp;
         memcpy(save, c->x, sizeof save);
@@ -252,7 +252,7 @@ static int field_hook(Cpu *c, uint64_t addr) {
         c->x[2] = (uint64_t)g_fade_type;
         c->x[3] = (uint64_t)g_fadein_frames;
         LOG("[wild] f%llu fading in by hand: manager %llx type %d frames %d (last fade-out %s)\n",
-            (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0], g_fade_type, g_fadein_frames, g_fade_seen ? "seen" : "NOT seen");
+            (unsigned long long)renderer_game_frame(), (unsigned long long)c->x[0], g_fade_type, g_fadein_frames, g_fade_seen ? "seen" : "NOT seen");
         rt_call_original(c, FADE_IN_FN);
         memcpy(c->x, save, sizeof save);
         c->x[30] = lr;
@@ -262,9 +262,9 @@ static int field_hook(Cpu *c, uint64_t addr) {
 }
 
 static int dtor_hook(Cpu *c, uint64_t addr) {
-    LOG("[wild] f%llu class A object %llx destroyed\n", (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0]);
+    LOG("[wild] f%llu class A object %llx destroyed\n", (unsigned long long)renderer_game_frame(), (unsigned long long)c->x[0]);
     g_active = false;
-    g_end_frame = g_dbg_frame = (long)renderer_present_count();
+    g_end_frame = g_dbg_frame = (long)renderer_game_frame();
     if (g_fadein_on) g_fadein_done = false;
     (void)addr;
     return 0;
@@ -413,7 +413,7 @@ static int state_hook(Cpu *c, uint64_t addr) {
     uint32_t st = R32(c->x[0], 0x68);
     if (st != last) {
         last = st;
-        LOG("[wild] f%llu process %llx state %u\n", (unsigned long long)renderer_present_count(), (unsigned long long)c->x[0], st);
+        LOG("[wild] f%llu process %llx state %u\n", (unsigned long long)renderer_game_frame(), (unsigned long long)c->x[0], st);
     }
     (void)addr;
     return 0;

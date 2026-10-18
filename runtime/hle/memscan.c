@@ -11,7 +11,7 @@
 
 #include "hle.h"
 
-uint64_t renderer_present_count(void);
+uint64_t renderer_game_frame(void);
 
 static uint8_t g_pat[64];
 static size_t g_patlen;
@@ -55,9 +55,9 @@ static void scan_region(const uint8_t *b, size_t size, void *arg) {
 
 static DWORD WINAPI scan_thread(LPVOID unused) {
     (void)unused;
-    while ((long)renderer_present_count() < g_frame) Sleep(50);
+    while ((long)renderer_game_frame() < g_frame) Sleep(50);
     Scan s = {g_pat, g_patlen, {0}, 0};
-    LOG("[scan] scanning at present %llu for %zu bytes\n", (unsigned long long)renderer_present_count(), g_patlen);
+    LOG("[scan] scanning at present %llu for %zu bytes\n", (unsigned long long)renderer_game_frame(), g_patlen);
     each_region(scan_region, &s);
     LOG("[scan] %d hit(s)\n", s.nhits);
     for (int i = 0; i < s.nhits; i++) {

@@ -526,7 +526,10 @@ static NvnTexture *g_last_presented;
 const float *vk_shot_crop(void) { return g_shot_crop; }
 
 void backend_present(NvnTexture *t);
+void backend_represent(void);
+static void represent_job(void *unused) { (void)unused; backend_represent(); }
 void backend_represent(void) {
+    if (rt_active() && !rt_on_render_thread()) { rt_call(represent_job, NULL); return; }  // (the keyboard dialog: game thread)
     if (g_last_presented) backend_present(g_last_presented);
     else SDL_Delay(16);
 }
@@ -648,15 +651,16 @@ void backend_present(NvnTexture *t) {
         extern void renderdoc_frame(uint64_t frame);
         renderdoc_frame(total_frames);
     }
+    // (with the render thread the game thread runs these three when it queues the present: rt_present)
     extern void input_frame(uint64_t frame);
-    input_frame(total_frames);
+    if (!rt_on_render_thread()) input_frame(total_frames);
     static long slow_ms = -1;
     if (slow_ms < 0) slow_ms = getenv("LARECOMP_SLOW_FRAME_MS") ? atol(getenv("LARECOMP_SLOW_FRAME_MS")) : 0;
     if (slow_ms > 0 && total_frames > 2600) SDL_Delay((Uint32)slow_ms);
     extern void fnprof_frame(uint64_t frame);
-    fnprof_frame(total_frames);
+    if (!rt_on_render_thread()) fnprof_frame(total_frames);
     extern void reboot_test_frame(uint64_t frame);  // runtime/main.c (LARECOMP_REBOOT_AT)
-    reboot_test_frame(total_frames);
+    if (!rt_on_render_thread()) reboot_test_frame(total_frames);
     static long shot_every = -1;
     if (shot_every < 0) { const char *e = getenv("LARECOMP_SCREENSHOT_EVERY"); shot_every = e ? atol(e) : 0; }
     extern bool g_debug_frame;
@@ -792,6 +796,7 @@ void backend_init(void) {
 
 // ---- in-place reboot (runtime/main.c teardown; main thread, guest threads stopped)
 void backend_reset(void) {
+    rt_reset();  // (the queued work belongs to the game that is going away)
     if (!g_vk.dev) return;
     vkDeviceWaitIdle(g_vk.dev);
     extern void vk_textures_reset(void);

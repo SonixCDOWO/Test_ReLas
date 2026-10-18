@@ -3598,6 +3598,7 @@ static void exec_list(uint64_t handle, int depth) {
 }
 
 void backend_execute(uint64_t handle) {
+    if (ENV("LARECOMP_EXP_NOEXEC")) return;  // (research: the game's chain without the backend's work; the picture stays blank)
     PROF_T0();
     if (ip_enabled()) ip_note_list(handle);
     exec_list(handle, 0);

@@ -23,7 +23,7 @@
 
 void rt_register_fnhook(uint64_t addr, int (*fn)(Cpu *c, uint64_t addr));  // runtime/fnhook.c
 void rt_call_original(Cpu *c, uint64_t addr);
-uint64_t renderer_present_count(void);
+uint64_t renderer_game_frame(void);
 
 #define G1_ADDR 0x7000f7eec0ull  // G[1]: 33333334 ns
 #define G1_ORIGINAL 33333334u
@@ -42,7 +42,7 @@ static long g_scene_start = -1;  // research: the present a capture began in (LA
 long fps60_scene_start(void) { return g_scene_start; }
 static int scene_start_hook(Cpu *c, uint64_t addr) {
     if (g_scene_start < 0) {
-        g_scene_start = (long)renderer_present_count();
+        g_scene_start = (long)renderer_game_frame();
         LOG("[fps60] scene start %ld (f_%llx)\n", g_scene_start, (unsigned long long)addr);
     }
     (void)c, (void)addr;
@@ -57,7 +57,7 @@ static bool g_scene;  // inside a battle or a capture (until the world updates a
 static bool g_stats;
 static unsigned long g_n_world, g_n_acc, g_n_tick_ask, g_n_tick_do;
 int rt_scene_tick(void) {
-    int r = !(g_all60 && g_scene && (renderer_present_count() & 1));
+    int r = !(g_all60 && g_scene && (renderer_game_frame() & 1));
     g_n_tick_ask++, g_n_tick_do += r;
     return r;
 }
@@ -113,7 +113,7 @@ static int g1_reader_hook(Cpu *c, uint64_t addr) {
 // holds a pointer to a pointer to it; +0x88 is the index), once a second.
 static void log_index(void) {
     static uint64_t last;
-    uint64_t f = renderer_present_count();
+    uint64_t f = renderer_game_frame();
     if (f - last < 60) return;
     last = f;
     const uint64_t *slot = (const uint64_t *)(uintptr_t)(0x7000000000ull + 0x15fab08);
@@ -134,7 +134,7 @@ static int g_el_arg[16], g_nel;
 static long g_tp_from, g_tp_to = 0x7fffffffL;
 static int elapsed_hook(Cpu *c, uint64_t addr) {
     static int n;
-    long f = (long)renderer_present_count();
+    long f = (long)renderer_game_frame();
     if (f < g_tp_from || f > g_tp_to) return 0;
     int which = 1;
     for (int i = 0; i < g_nel; i++) if (g_el_fn[i] == addr) which = g_el_arg[i];
@@ -150,7 +150,7 @@ static int elapsed_hook(Cpu *c, uint64_t addr) {
             uint64_t r = c->x[0];
             if (r >= 0x7000000000ull)
                 LOG("[elapsed] f_%llx present %llu: delta %lld ns (timer %d: object %llx, getter f_%llx, step %llx)\n", (unsigned long long)addr,
-                    (unsigned long long)renderer_present_count(), (long long)*(const int64_t *)(uintptr_t)(r + 8), which,
+                    (unsigned long long)renderer_game_frame(), (long long)*(const int64_t *)(uintptr_t)(r + 8), which,
                     (unsigned long long)obj, (unsigned long long)fn, (unsigned long long)r);
             n++;
         }
@@ -173,7 +173,7 @@ void fps60_present(void) {
     if (g_stats) {
         static uint64_t t0, p0;
         extern uint64_t plat_now_ns(void);
-        uint64_t now = plat_now_ns(), p = renderer_present_count();
+        uint64_t now = plat_now_ns(), p = renderer_game_frame();
         if (!t0) t0 = now, p0 = p;
         if (now - t0 >= 1000000000ull) {
             LOG("[stats] t+%.2fs presents %llu world %lu acc %lu tick_ask %lu tick_do %lu scene %d interval %d G1 %u\n", (now - t0) / 1e9,
@@ -193,7 +193,7 @@ void fps60_present(void) {
     static int last = -1;  // 0 world, 1 menu (in-between images), 2 battle / capture
     int state = w ? 0 : fps60_menu() ? 1 : 2;
     static const char *const name[] = {"world: 60 fps", "menu: 30 fps with in-between images", "battle / capture: 30 fps"};
-    if (state != last) LOG("[fps60] %s from present %llu\n", name[state], (unsigned long long)renderer_present_count());
+    if (state != last) LOG("[fps60] %s from present %llu\n", name[state], (unsigned long long)renderer_game_frame());
     last = state;
 }
 
@@ -252,7 +252,7 @@ __attribute__((constructor)) static void fps60_init(void) {
 static int time_probe_hook(Cpu *c, uint64_t addr) {
     static int lines;
     uint64_t x1 = c->x[1];
-    long f = (long)renderer_present_count();
+    long f = (long)renderer_game_frame();
     int64_t el = x1 >= 0x7000000000ull && x1 < 0x7800000000ull ? *(const int64_t *)(uintptr_t)(x1 + 8) : -1;
     rt_call_original(c, addr);
     if (f >= g_tp_from && f <= g_tp_to && lines < 600) {
@@ -283,7 +283,7 @@ static struct { uint64_t lr; int which; uint64_t n; } g_tu[256];
 static int g_ntu;
 static long g_tu_from, g_tu_to;
 static int timer_users_hook(Cpu *c, uint64_t addr) {
-    long f = (long)renderer_present_count();
+    long f = (long)renderer_game_frame();
     if (f >= g_tu_from && f <= g_tu_to) {
         uint64_t lr = c->x[30];
         int which = (int)c->x[1], i;
@@ -315,7 +315,7 @@ static unsigned g_cc_n[CC_MAX];
 static int g_ncc;
 static long g_cc_frame = -1;
 static int callcount_hook(Cpu *c, uint64_t addr) {
-    long f = (long)renderer_present_count();
+    long f = (long)renderer_game_frame();
     if (f != g_cc_frame) {
         if (g_cc_frame >= g_tp_from && g_cc_frame <= g_tp_to) {
             char line[256];
@@ -357,7 +357,7 @@ static int probe_hook(Cpu *c, uint64_t addr) {
     uint64_t obj = c->x[0];
     rt_call_original(c, addr);
     uint64_t ret = c->x[0];
-    if (!g_probe_from) g_probe_from = renderer_present_count() + 1, g_probe_to = g_probe_from + (getenv("LARECOMP_PROBE_FRAMES") ? atoi(getenv("LARECOMP_PROBE_FRAMES")) : 120);
+    if (!g_probe_from) g_probe_from = renderer_game_frame() + 1, g_probe_to = g_probe_from + (getenv("LARECOMP_PROBE_FRAMES") ? atoi(getenv("LARECOMP_PROBE_FRAMES")) : 120);
     for (int pass = 0; pass < 2 && g_nprobe < PROBE_MAX; pass++) {
         uint64_t p = pass ? ret : obj;
         if (p < 0x7000000000ull || p > 0x7800000000ull) continue;
@@ -368,7 +368,7 @@ static int probe_hook(Cpu *c, uint64_t addr) {
     return 1;
 }
 void fps60_probe_present(void) {
-    uint64_t f = renderer_present_count();
+    uint64_t f = renderer_game_frame();
     if (!g_probe_from || f < g_probe_from || f > g_probe_to) return;
     for (int i = 0; i < g_nprobe; i++) {
         const uint32_t *now = (const uint32_t *)(uintptr_t)g_probe[i].base;

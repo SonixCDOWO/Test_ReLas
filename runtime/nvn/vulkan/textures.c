@@ -584,7 +584,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
 // Host writes into guest memory that textures may sit on (Let's Go's movie decoder fills NV12 buffers the game
 // wraps in R8 / RG8 textures): any thread records the range; a texture over it is CPU-owned again at its next use,
 // so upload_texture's hash check picks the new data up (a GPU clear had made it GPU-owned: a green movie).
-#define DIRTY_RING 32
+#define DIRTY_RING 4096  // (with the render thread a list can run a few frames after the writes made before it were stamped)
 static struct { uint64_t lo, hi, seq; } g_dirty[DIRTY_RING];
 static _Atomic uint64_t g_dirty_seq;
 static pthread_mutex_t dirty_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -600,8 +600,14 @@ void backend_pool_written(uint64_t addr, uint64_t size) {
     pthread_mutex_unlock(&dirty_lock);
 }
 
+// The render thread (renderthread.c) stamps each list with the write count when the game submitted it: the list sees the
+// writes made before that and not the later ones (0: no list, everything so far).
+static uint64_t g_dirty_limit;
+uint64_t backend_dirty_seq(void) { return g_dirty_seq; }
+void backend_set_dirty_limit(uint64_t seq) { g_dirty_limit = seq; }
+
 static void dirty_check(NvnTexture *t, TexBackend *b) {
-    uint64_t now = g_dirty_seq;
+    uint64_t now = g_dirty_limit ? g_dirty_limit : g_dirty_seq;
     if (b->dirty_seq == now) return;
     if (!b->dirty_seq) { b->dirty_seq = now; return; }  // (new texture: uploaded from memory anyway)
     uint64_t lo = t->addr, hi = t->addr + tegra_total_size(&t->layout);

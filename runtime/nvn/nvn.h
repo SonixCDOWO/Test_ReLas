@@ -83,6 +83,7 @@ typedef struct NvnWindow {
 typedef struct NvnSync {
     volatile int signaled;
     volatile uint64_t seq;  // GPU submission this fence belongs to (renderer_fence_seq), 0 = none
+    volatile uint64_t ticket;  // with the render thread: the jobs queued when the game fenced (rt_fence_ticket), 0 = none
 } NvnSync;
 
 // ---- command recording (stored in guest command memory)
@@ -133,3 +134,14 @@ void backend_execute(uint64_t handle);            // run a recorded command list
 void backend_present(NvnTexture *tex);            // show a texture in the window
 void backend_texture_destroyed(NvnTexture *tex);
 void backend_pool_written(uint64_t addr, uint64_t size);
+// render thread (vulkan/renderthread.c): with LARECOMP_RENDER_THREAD off these run the backend call on the spot
+bool rt_active(void);
+bool rt_on_render_thread(void);
+void rt_submit(uint64_t handle);
+void rt_present(NvnTexture *tex);
+void rt_call(void (*fn)(void *), void *arg);
+void rt_drain(void);
+uint64_t rt_fence_ticket(void);
+void rt_wait_ticket(uint64_t ticket);
+void rt_reset(void);
+uint64_t renderer_game_frame(void);  // presents the game has made (the backend's own count: renderer_present_count)

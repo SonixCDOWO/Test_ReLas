@@ -18,7 +18,7 @@
 #include "../hle.h"
 #include "../platform.h"
 
-uint64_t renderer_present_count(void);
+uint64_t renderer_game_frame(void);
 
 #define MAXW 48
 static uint64_t g_addr[MAXW];
@@ -37,7 +37,7 @@ static LONG CALLBACK veh(EXCEPTION_POINTERS *ep) {
         if (!watched_page(page)) return EXCEPTION_CONTINUE_SEARCH;
         for (int i = 0; i < g_n; i++) {
             if (a >= g_addr[i] && a < g_addr[i] + 4) {
-                LOG("[watch] f%llu write to %llx (was %08x)\n", (unsigned long long)renderer_present_count(), (unsigned long long)g_addr[i],
+                LOG("[watch] f%llu write to %llx (was %08x)\n", (unsigned long long)renderer_game_frame(), (unsigned long long)g_addr[i],
                     *(volatile uint32_t *)(uintptr_t)g_addr[i]);
                 plat_print_backtrace();
                 break;
@@ -115,7 +115,7 @@ static void find_party(void) {
 
 static DWORD WINAPI party_thread(LPVOID arg) {
     long at = (long)(intptr_t)arg;
-    while ((long)renderer_present_count() < at) Sleep(100);
+    while ((long)renderer_game_frame() < at) Sleep(100);
     find_party();
     return 0;
 }
@@ -160,7 +160,7 @@ static void snap_diff(void) {
     static uint32_t count[MAXDELTA];
     static uint64_t sample[MAXDELTA][6];
     memset(count, 0, sizeof count);
-    LOG("[snap] f%llu: growth since the copy\n", (unsigned long long)renderer_present_count());
+    LOG("[snap] f%llu: growth since the copy\n", (unsigned long long)renderer_game_frame());
     for (size_t p = 0; p < g_npages; p++) {
         const uint32_t *now = (const uint32_t *)(uintptr_t)g_pages[p].addr, *old = (const uint32_t *)g_pages[p].copy;
         for (int i = 0; i < 1024; i++) {
@@ -184,10 +184,10 @@ static void snap_diff(void) {
 
 static DWORD WINAPI snap_thread(LPVOID arg) {
     long a = (long)(intptr_t)arg & 0xffffff, b = (long)((intptr_t)arg >> 24);
-    while ((long)renderer_present_count() < a) Sleep(100);
+    while ((long)renderer_game_frame() < a) Sleep(100);
     snap_take();
     for (int k = 0; k < 30; k++) {  // (every 250 presents from B on)
-        while ((long)renderer_present_count() < b + 250L * k) Sleep(100);
+        while ((long)renderer_game_frame() < b + 250L * k) Sleep(100);
         snap_diff();
     }
     return 0;
