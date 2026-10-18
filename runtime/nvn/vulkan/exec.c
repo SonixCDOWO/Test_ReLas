@@ -154,8 +154,14 @@ static void ring_retire(void);
 bool g_gpuprof_frame;
 static VkQueryPool gp_qp;
 static int gp_n;
-static char gp_label[512][112];
-static uint32_t gp_draws[512];
+#define GP_MAX 4096
+static char gp_label[GP_MAX][112];
+static uint32_t gp_draws[GP_MAX];
+// LARECOMP_GPUPROF_STATS=1 (with LARECOMP_GPUPROF_DRAWS): the pipeline statistics of every draw of the profiled frames
+// (input vertices, vertex shader invocations, clipped primitives, fragment shader invocations), printed on its row.
+static VkQueryPool gps_qp;
+static int gps_n;
+static int gp_stat[GP_MAX];  // mark -> its index in gps_qp + 1 (0: none)
 // LARECOMP_VK_DEVLOST_TRACE=1: the last 64 GPU operations, dumped on device loss (with LARECOMP_SYNC_SUBMIT=1 the
 // dump ends with the command list that faulted).
 static char dl_ring[64][128];
@@ -175,13 +181,32 @@ void vk_devlost_dump(void) {
     LOG("[vk] last GPU operations before the device loss (oldest first):\n");
     for (unsigned i = dl_n > 64 ? dl_n - 64 : 0; i < dl_n; i++) LOG("[vk]   %s\n", dl_ring[i & 63]);
 }
+uint64_t vk_frame_counter(void);
+static uint64_t gp_frame;  // the frame counter when the profiled frame began (parity: LARECOMP_EXP_ALT)
 static void gp_mark(VkCommandBuffer cb, const char *fmt, ...) {
-    if (!g_gpuprof_frame || gp_n >= 511) return;
+    if (!g_gpuprof_frame || gp_n >= GP_MAX - 1) return;
     if (!gp_qp) {
-        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 512};
+        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = GP_MAX};
         if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &gp_qp) != VK_SUCCESS) { g_gpuprof_frame = false; return; }
     }
-    if (!gp_n) vkCmdResetQueryPool(cb, gp_qp, 0, 512);
+    if (!gp_n) {
+        gp_frame = vk_frame_counter();
+        vkCmdResetQueryPool(cb, gp_qp, 0, GP_MAX);
+        if (getenv("LARECOMP_GPUPROF_STATS")) {
+            if (!gps_qp) {
+                VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+                                            .queryCount = GP_MAX,
+                                            .pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
+                                                                  VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
+                                                                  VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+                                                                  VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT};
+                if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &gps_qp) != VK_SUCCESS) gps_qp = VK_NULL_HANDLE;
+            }
+            if (gps_qp) vkCmdResetQueryPool(cb, gps_qp, 0, GP_MAX);
+            gps_n = 0;
+        }
+    }
+    gp_stat[gp_n] = 0;
     vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, gp_qp, (uint32_t)gp_n);
     va_list ap;
     va_start(ap, fmt);
@@ -194,14 +219,24 @@ void renderer_flush(void);
 void vk_gpuprof_report(void) {
     if (!gp_n) return;
     renderer_flush();
-    uint64_t t[512];
+    static uint64_t t[GP_MAX];
     if (vkGetQueryPoolResults(g_vk.dev, gp_qp, 0, (uint32_t)gp_n, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
         double per = g_vk.props.limits.timestampPeriod / 1e6, total = (t[gp_n - 1] - t[0]) * per;
-        LOG("[gpuprof] %d marks, %.2f ms first to last (rows: the work after each mark, until the next)\n", gp_n, total);
+        LOG("[gpuprof] %d marks, %.2f ms first to last (frame %llu; rows: the work after each mark, until the next)\n", gp_n, total,
+            (unsigned long long)gp_frame);
+        static uint64_t stats[GP_MAX * 4];
+        bool have_stats = gps_qp && gps_n &&
+            vkGetQueryPoolResults(g_vk.dev, gps_qp, 0, (uint32_t)gps_n, sizeof stats, stats, 32, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS;
         for (int i = 0; i + 1 < gp_n; i++) {
             double ms = (t[i + 1] - t[i]) * per;
-            LOG("[gpuprof] %6.3f ms %5.1f%%  %s%s", ms, 100 * ms / (total > 0 ? total : 1), gp_label[i], gp_draws[i] ? "" : "\n");
+            bool st = have_stats && gp_stat[i];
+            LOG("[gpuprof] %6.3f ms %5.1f%%  %s%s", ms, 100 * ms / (total > 0 ? total : 1), gp_label[i], gp_draws[i] || st ? "" : "\n");
             if (gp_draws[i]) LOG(", %u draws\n", gp_draws[i]);
+            if (st) {
+                const uint64_t *q = &stats[(gp_stat[i] - 1) * 4];  // (the enabled bits, in order: IA vertices, VS invocations, clip prims, FS invocations)
+                LOG(" | ia %llu vsinv %llu clipprim %llu fsinv %llu\n", (unsigned long long)q[0], (unsigned long long)q[1],
+                    (unsigned long long)q[2], (unsigned long long)q[3]);
+            }
         }
     }
     gp_n = 0;
@@ -323,6 +358,17 @@ static int new_chunk(uint64_t size) {
     VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &c->buf, &c->mem, &info));
     c->ptr = info.pMappedData;
     c->size = size;
+    {   // (where the GPU reads the vertex / uniform copies from: VRAM through the BAR, or system memory over PCIe)
+        VkMemoryPropertyFlags mp = 0;
+        vmaGetAllocationMemoryProperties(g_vk.vma, c->mem, &mp);
+        const VkPhysicalDeviceMemoryProperties *props;
+        vmaGetMemoryProperties(g_vk.vma, &props);
+        uint32_t heap = props->memoryTypes[info.memoryType].heapIndex;
+        LOG("[vk] ring chunk %d: %llu MB, memory type %u (%s%s%s), heap %u of %llu MB\n", nchunks, (unsigned long long)(size >> 20),
+            info.memoryType, mp & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? "device-local " : "system memory ",
+            mp & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? "host-visible " : "", mp & VK_MEMORY_PROPERTY_HOST_CACHED_BIT ? "cached" : "write-combined",
+            heap, (unsigned long long)(props->memoryHeaps[heap].size >> 20));
+    }
     return nchunks++;
 }
 
@@ -1030,6 +1076,44 @@ static void translate_program(void *arg) {
     maxwell_gmem_size = HEAP_MAX;
     uint64_t t0 = SDL_GetTicksNS();
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
+    // Experiment (research): LARECOMP_EXP_VS_EARLY=<vertex program address, hex>: that program's vertex shader returns at
+    // the start of main (every output at its default), to tell the cost of running the shader from the rest of its draw.
+    // (LARECOMP_EXP_VS_EARLY=<address>:<pc, hex>: it returns just before the instruction at that pc instead)
+    if (p->vi->msl && getenv("LARECOMP_EXP_VS_EARLY") && p->code[0] == strtoull(getenv("LARECOMP_EXP_VS_EARLY"), NULL, 16)) {
+        const char *m = strstr(p->vi->msl, "void main() {"), *r = m ? strstr(m, "  uint r") : NULL;
+        const char *colon = strchr(getenv("LARECOMP_EXP_VS_EARLY"), ':');
+        if (m && colon) {
+            char pat[32];
+            snprintf(pat, sizeof pat, "// pc %s:", colon + 1);
+            const char *at = strstr(m, pat);
+            while (at && at > m && at[-1] != '\n') at--;  // (the start of that line)
+            r = at ? at : NULL;
+        }
+        if (r) {
+            size_t len = strlen(p->vi->msl), pr = (size_t)(r - p->vi->msl);
+            char *s = malloc(len + 16);
+            memcpy(s, p->vi->msl, pr);
+            memcpy(s + pr, "  return;\n", 10);
+            memcpy(s + pr + 10, p->vi->msl + pr, len - pr + 1);
+            p->vi->msl = s;
+            LOG("[exp] vertex program %llx returns at the start of main\n", (unsigned long long)p->code[0]);
+        }
+    }
+    // Experiment (research): LARECOMP_GLSL_OVERRIDE_DIR=<dir>: <dir>/<code address, hex>_vs.glsl replaces the generated GLSL
+    // of that vertex program (a hand-edited version of what LARECOMP_SAVE_MSL=1 wrote in build/glsl/).
+    if (p->vi->msl && getenv("LARECOMP_GLSL_OVERRIDE_DIR")) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/%llx_vs.glsl", getenv("LARECOMP_GLSL_OVERRIDE_DIR"), (unsigned long long)p->code[0]);
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long n = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            char *s = malloc((size_t)n + 1);
+            if (s && fread(s, 1, (size_t)n, f) == (size_t)n) { s[n] = 0; p->vi->msl = s; LOG("[exp] GLSL override: %s\n", path); }
+            fclose(f);
+        }
+    }
     // Experiment X4 (docs/PLANO-3D.md), LARECOMP_VK_SKIN_ONEBONE=1: skinned vertex shaders see 100% weight on the
     // first bone (a12 = bone weights) - rigid, but whole, if the first bone's matrix reaches the GPU correctly.
     // Experiment X6, LARECOMP_VK_SKIN_IDX_X=1: every bone slot uses the first bone index (a11.x), weights unchanged.
@@ -2387,12 +2471,38 @@ static void draw_(CmdRec *r, bool indexed) {
 
     if (prof) prof_vtx += SDL_GetTicksNS() - prof_t2_;
     // ---- draw
-    if (!use_index) vkCmdDraw(cb, count, inst, first, base_inst);
-    else vkCmdDrawIndexed(cb, icount, inst, 0, base_vertex, base_inst);
+    // LARECOMP_GPUPROF_DRAWS=1 (with LARECOMP_GPUPROF_AT): a mark before every draw, so each row is one draw's GPU time
+    static int gp_draw_marks = -1;
+    if (gp_draw_marks < 0) gp_draw_marks = getenv("LARECOMP_GPUPROF_DRAWS") != NULL;
+    if (g_gpuprof_frame && gp_draw_marks)
+        gp_mark(cb, "draw vs %llx fs %016llx fsaddr %llx %s %u inst %u", (unsigned long long)st.program->stages[0].code_addr,
+                (unsigned long long)g_cur_fs_hash, (unsigned long long)st.program->stages[1].code_addr, use_index ? "elements" : "arrays", use_index ? icount : count, inst);
+    // Experiment (research): LARECOMP_EXP_VS=<vertex program address, hex> with LARECOMP_EXP_MODE=skip | scissor | half
+    // changes only the draws of that program: no draw, a 1x1 scissor (no pixel work, vertex work kept) or half the instances.
+    static uint64_t exp_vs;
+    static int exp_mode = -1;
+    if (exp_mode < 0) {
+        const char *v = getenv("LARECOMP_EXP_VS"), *m = getenv("LARECOMP_EXP_MODE");
+        exp_vs = v ? strtoull(v, NULL, 16) : 0;
+        exp_mode = !exp_vs || !m ? 0 : !strcmp(m, "skip") ? 1 : !strcmp(m, "scissor") ? 2 : !strcmp(m, "half") ? 3 : 0;
+    }
+    // (LARECOMP_EXP_ALT=1: only on odd frames, so one run holds both versions of the same scene)
+    static int exp_alt = -1;
+    if (exp_alt < 0) exp_alt = getenv("LARECOMP_EXP_ALT") != NULL;
+    bool exp_hit = exp_mode && st.program->stages[0].code_addr == exp_vs && (!exp_alt || (vk_frame_counter() & 1));
+    uint32_t inst_eff = exp_hit && exp_mode == 3 && inst > 1 ? inst / 2 : inst;
+    if (exp_hit && exp_mode == 2) { VkRect2D one = {{0, 0}, {1, 1}}; vkCmdSetScissor(cb, 0, 1, &one); }
+    bool gp_q = g_gpuprof_frame && gp_draw_marks && gps_qp && gp_n && gps_n < GP_MAX;
+    if (gp_q) vkCmdBeginQuery(cb, gps_qp, (uint32_t)gps_n, 0);
+    if (exp_hit && exp_mode == 1) { /* skipped */ }
+    else if (!use_index) vkCmdDraw(cb, count, inst_eff, first, base_inst);
+    else vkCmdDrawIndexed(cb, icount, inst_eff, 0, base_vertex, base_inst);
+    if (gp_q) { vkCmdEndQuery(cb, gps_qp, (uint32_t)gps_n); gp_stat[gp_n - 1] = gps_n + 1; gps_n++; }
+    if (exp_hit && exp_mode == 2) apply_scissor();
     stat_draws++;
     g_draws_total++;
     cum_draws++;
-    if (g_gpuprof_frame && gp_n) {
+    if (g_gpuprof_frame && gp_n && !gp_draw_marks) {
         if (!gp_draws[gp_n - 1]) {  // first draw of the row: its fragment shader hash
             size_t l = strlen(gp_label[gp_n - 1]);
             snprintf(gp_label[gp_n - 1] + l, sizeof gp_label[0] - l, ", first fs %016llx", (unsigned long long)g_cur_fs_hash);

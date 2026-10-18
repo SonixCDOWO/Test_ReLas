@@ -54,6 +54,12 @@ uint64_t hle_register(const char *name, HostFn fn) {
     if (hle_count == MAX_HLE) FATAL("too many HLE stubs\n");
     hle_slots[hle_count].name = strdup(name);
     hle_slots[hle_count].fn = fn;
+    {   // LARECOMP_HLE_WHO=<fake address, hex>[,...]: names the host function behind an address of a thread dump
+        const char *who = getenv("LARECOMP_HLE_WHO");
+        char want[32];
+        snprintf(want, sizeof want, "%llx", (unsigned long long)(HLE_BASE + 16ull * hle_count));
+        if (who && strstr(who, want)) LOG("[hle] %s = %s%s\n", want, name, fn ? "" : " (no host implementation)");
+    }
     return HLE_BASE + 16ull * hle_count++;
 }
 
