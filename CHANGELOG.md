@@ -29,6 +29,7 @@ other graphics cards** (AMD, Intel, integrated): feedback is welcome in an issue
   A/B performance test with a confidence interval, per-draw GPU timing and a frame time CSV (docs/DEPURACAO.md,
   docs/PESQUISA-GPU.md).
 - Upgrading from 0.2.x: unzip over your install; no new setup (the game library is not rebuilt).
+- Tested with the zip built for this release, unzipped over 0.2.x installs of both games and started without MSYS2 on the PATH (no recompiling needed): Eevee loads a save and reaches the world (Route 2); Pikachu boots with the render thread on and plays the opening movie.
 
 ## 0.2.2 (2026-10-17)
 
