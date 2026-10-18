@@ -22,7 +22,12 @@ static uint64_t g_lo, g_hi;
 static bool lazy_commit(uint64_t a) {
     if (a < g_lo || a >= g_hi) return false;
     MEMORY_BASIC_INFORMATION mi;
-    if (!VirtualQuery((void *)(uintptr_t)a, &mi, sizeof mi) || mi.State != MEM_RESERVE) return false;
+    if (!VirtualQuery((void *)(uintptr_t)a, &mi, sizeof mi)) return false;
+    // Two threads touching the same uncommitted chunk at once: the first commits it, the second faulted before that
+    // and finds it committed - retry the access. (A page protected on purpose, plat_protect / LARECOMP_WATCH, is not
+    // plain read-write and still faults.)
+    if (mi.State == MEM_COMMIT) return mi.Protect == PAGE_READWRITE;
+    if (mi.State != MEM_RESERVE) return false;
     uint64_t base = a & ~(COMMIT_CHUNK - 1);
     return VirtualAlloc((void *)(uintptr_t)base, COMMIT_CHUNK, MEM_COMMIT, PAGE_READWRITE) != NULL;
 }
@@ -33,7 +38,8 @@ static LONG CALLBACK vectored_handler(EXCEPTION_POINTERS *ep) {
     EXCEPTION_RECORD *er = ep->ExceptionRecord;
     if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || er->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
     uint64_t fa = er->ExceptionInformation[1];
-    if (lazy_commit(fa)) return EXCEPTION_CONTINUE_EXECUTION;
+    // (an execute fault on a read-write page would be "retried" by lazy_commit forever)
+    if (er->ExceptionInformation[0] != 8 && lazy_commit(fa)) return EXCEPTION_CONTINUE_EXECUTION;
     if (g_report_crashes && rt_fault_watch(fa, ep->ContextRecord->Rip)) return EXCEPTION_CONTINUE_EXECUTION;
     return EXCEPTION_CONTINUE_SEARCH;
 }
