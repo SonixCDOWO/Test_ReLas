@@ -42,6 +42,7 @@ def run_once(game, mode, env_extra, tag):
     if game == "pikachu":
         root = "extracted-pikachu"
         env["LARECOMP_GAME_LIB"] = os.path.join(ROOT, "extracted-pikachu", "lasgame.dll")
+    env["PATH"] = "C:/msys64/ucrt64/bin;C:/msys64/usr/bin;" + env.get("PATH", "")  # (the runtime's DLLs: SDL3, ffmpeg...)
     env.update(env_extra)
     log = os.path.join(out, "log.txt")
     with open(log, "w") as lf:
