@@ -925,6 +925,16 @@ static void begin_pass(void) {
         if (eh < minh) minh = eh;
         pass_samples = b->samples;
     }
+    // Bound color slots without a texture / view went in as VK_NULL_HANDLE attachments (legal), but Intel's Windows
+    // driver for UHD 630 crashes in vkCmdBeginRendering on them (LAS Recomp f4cb039, its issues #8 / #46). Empty slots
+    // at the end are left out (pipelines and clears follow pass_ncolor); one in the middle is logged once.
+    while (pass_ncolor && !ca[pass_ncolor - 1].imageView) pass_ncolor--;
+    static bool logged_hole;
+    for (uint32_t i = 0; i < pass_ncolor && !logged_hole; i++)
+        if (!ca[i].imageView) {
+            logged_hole = true;
+            LOG("[vk] pass with an empty color slot %u of %u (texture %s)\n", i, pass_ncolor, st.rt.color[i] ? "without a view" : "none");
+        }
     pass_depth = pass_stencil = VK_FORMAT_UNDEFINED;
     bool has_d = false, has_s = false;
     if (st.rt.depth) {
