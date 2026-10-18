@@ -5,6 +5,7 @@
                                                 "STRONG n" (>= 0.5% of the image) as the last line
   bateria_scan.py diff <raw A> <raw B>          per-frame difference between two runs of the same route: mean absolute luma
                                                 difference, % of pixels off by > 24; prints a summary and the worst frames
+  bateria_scan.py cmp <A runs...> -- <B runs...>   the A x A spread against A x B (3 + 3 runs): the verdict OK / OUTSIDE
   bateria_scan.py noise <raw A1> <raw A2> <raw B> [k]
                                                 B against the noise between two runs of the same mode: frames where B differs
                                                 from A1 and from A2 by more than k (default 1.5) x the A1-A2 difference
@@ -109,9 +110,25 @@ def cmd_noise(a1, a2, b, k=1.5):
     print(f'DIFFER {len(bad)}')
 
 
+def cmd_cmp(group_a, group_b, pct=1.0):
+    """Pairs within A (the noise between runs of one mode) against pairs A x B: per pair, how many frames differ by more than
+    pct % of the pixels. B is as it should be when its A x B counts sit inside the A x A spread."""
+    def count(x, y):
+        s, _ = series(x, y)
+        return sum(1 for v in s.values() if v[1] > pct), len(s)
+    aa = [count(group_a[i], group_a[j]) for i in range(len(group_a)) for j in range(i + 1, len(group_a))]
+    ab = [count(x, y) for x in group_a for y in group_b]
+    f = lambda l: f'{min(c for c, _ in l)}-{max(c for c, _ in l)} (avg {sum(c for c, _ in l) / len(l):.0f}) of {l[0][1]}'
+    print(f'frames off by >{pct}% of pixels:  A x A {f(aa)}   A x B {f(ab)}')
+    print(f'CMP {"OK" if max(c for c, _ in ab) <= max(c for c, _ in aa) * 1.5 + 5 else "OUTSIDE"}')
+
+
 if __name__ == '__main__':
     c = sys.argv[1:2]
     if c == ['blink']: cmd_blink(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     elif c == ['diff']: cmd_diff(sys.argv[2], sys.argv[3])
     elif c == ['noise']: cmd_noise(*sys.argv[2:5], *(float(x) for x in sys.argv[5:6]))
+    elif c == ['cmp']:
+        sep = sys.argv.index('--')
+        cmd_cmp(sys.argv[2:sep], sys.argv[sep + 1:])
     else: sys.exit(__doc__)
