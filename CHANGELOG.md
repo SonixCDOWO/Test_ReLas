@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-19)
 
+- **Fixes the world drawn wrong after a catch** (0.3.2): black trees with yellow stripes, bushes with a sign's texture
+  or a flat colour, and no dirt path until the area changed. After a catch the game loads shaders again at addresses
+  that held other shaders, and the renderer handed back the old translations; shaders are now known by their content
+  too. Checked with automatic catch loops: 7 catches on Eevee and 9 on Pikachu.
 - **2x interface checked before it is packed**: waifu2x once (in seven runs) exited normally with garbage for every
   image, and the menus' icons came out as noise. Each 2x image, taken back down to 1x, must now match the original
   (good ones differ by up to 7 of 255, that garbage by 66 or more); with more than 10% off, no pack is written and the
