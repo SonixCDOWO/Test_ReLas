@@ -1,5 +1,109 @@
 # Changelog
 
+## Unreleased
+
+- **Fixes many 2x interface images showing wrong** (partly or wholly transparent): waifu2x-ncnn-vulkan 20250915
+  loses the alpha of an RGBA image outside its last tiles (a fully opaque 512x288 image came out 25/32 transparent).
+  Images are now upscaled as RGB only - with transparency, their colour and their alpha (as a grey image) separately,
+  put back together when packed. Opaque images now go into BC1 (the pack: 667 -> 548 MB). Make them again once.
+- **Better background blur and depth of field** (`blur_quality = 1`, on by default): the menus' blurred backdrop and the
+  title screen's depth of field come from one post-processing chain of the game's - the HDR scene taken down to 1/2,
+  1/3 and 1/6 of its size with a single bilinear tap, blurred there with 5- and 9-tap separable kernels, mixed back by
+  each pixel's blur size with bilinear reads (blocky, diamond-shaped steps at 1440p and 4K). Seven of its shaders, known
+  by the hash of their code, now read their textures better: a 13-tap downsample (Jimenez), four rotated-grid taps
+  per blur tap, and a cubic B-spline wherever a smaller level is magnified (the full-size scene is read as before). The
+  game's own weights, focus and blend are untouched. The bloom shares the downsample and one blur shader. Cost at
+  1440p, RTX 5070 Ti: +0.27 ms while a menu or the depth of field is on screen (the composite 0.05 -> 0.22 ms), a few
+  hundredths of a millisecond for the bloom otherwise.
+- **Sharper interface (2x)**, optional: a start-screen button makes the game's menu and interface images again at
+  twice their resolution from the player's own game files - nothing of the game ships with the app. Every texture of
+  the interface archives (`bin/app/*.arc`, 3081 different images, 316 more in formats left out) is decoded, upscaled by
+  waifu2x-ncnn-vulkan (CUnet, light denoising; downloaded once from GitHub, 35 MB, checked by its SHA-256) and
+  compressed again (BC1 / BC3 / BC4 / BC5) into `cache/ui2x.pak` (~670 MB). In the game a texture is matched by the
+  key of its content and drawn from its 2x version at the same place. RTX 5070 Ti: about a minute (14 s reading the
+  images, 17 s upscaling, 25 s compressing). A box on the start screen turns them off (`ui2x = 0`). The Real-ESRGAN
+  build tried first loses the device on RTX 50 GPUs (2022 ncnn); waifu2x's 2025 build runs there.
+- **Fixes SSAO, GI, TAA and FSR 3.1 flickering in cutscenes and menus at 60 fps**: there the game runs at 30 and an
+  in-between image is drawn by replaying the frame; that image shared the frame's number, so the scene effects (which
+  run once per frame) skipped it and every other image on screen went out without occlusion, indirect light or
+  anti-aliasing. The in-between image is now a frame of its own for them, in the order the images are rendered: its own
+  jitter and history, its camera blended between the two frames as its draws are (motion vectors), and frame N's
+  post-processing (FSR 3.1, SMAA, the colour pass) done before the replay overwrites its inputs and shown after it.
+  Professor Oak's cutscene in Pallet Town, FSR 3.1 Native AA + SSAO + GI: the brightness jump between consecutive
+  images 0.100 -> 0.007, the in-between and final images now as alike as with the effects off (0.2 vs 0.13).
+- **Sharper text at high resolutions** (always on, nothing to set): the game rasterizes its text with the system font into
+  a 2048x1024 glyph cache at sizes 22-36, which went blurry when stretched to 1440p or 4K. Every glyph the game caches is
+  now rasterized again by the same engine (nn::fontll) at N x its size into an N x copy of the cache, which the renderer
+  samples instead of the original (same coordinates, so placement and layout are the game's). N is one step per 720
+  lines of the window when the game starts (720p: off, 1440p: 2x, 4K: 3x). Cost: one extra glyph rasterization per new glyph and only the changed part of
+  the cache uploaded (one full upload when the cache is made). `runtime/hle/font_hires.c`.
+- **In-game settings on F12**: volume, brightness, contrast and saturation, applied live and saved to `larecomp.ini`
+  (`brightness`, `contrast`, `saturation`). From a controller: − and + together, then *Settings*.
+  `LARECOMP_MENU_KEY=<key name>` picks another key (Steam takes F12 for screenshots). The colour pass runs on the
+  whole image, the game's interface included, and only when a value is not 100%.
+- **Smoother shadows** (F12, *Shadow filter*): the game samples its 2048² shadow map with nearest filtering, so each
+  of its 11 taps is a hard in / out and shadow edges come out stair-stepped. *Bilinear* makes each tap a 2x2
+  depth-compare filter; *Smooth* (the default) a 3x3 tent of four bilinear taps; *Game's* keeps the original. Same
+  shadow-map resolution. Measured at 1280x720 on an RTX 5070 Ti: the scene pass from 0.16 to 0.62 ms (*Smooth*).
+  `shadow_filter = game | bilinear | smooth` in `larecomp.ini`.
+- **Camera motion vectors** (groundwork for temporal effects): the game's view and projection are read from its scene
+  constant block each frame; between the scene's opaque and blended draws each pixel's depth is taken to the previous
+  frame (previous view-projection x inverse of this one, in double) into an RG16F image. Static scenery only: the
+  characters get the camera's motion, not their own. F12 *Show motion vectors (debug)*; checked with
+  `tools/mv_check.py` (reprojecting the previous frame cuts the error by 80-90% while walking).
+- **F12 menu**: brightness, contrast and saturation moved to *Advanced...* (an *Image* section); the first page keeps the
+  volume, the effects' switches, the shadow filter, anti-aliasing and the upscaler. With **FSR 3.1** chosen, its mode
+  sets the render resolution - AMD's presets: Native AA (1.0x, FSR as anti-aliasing), Quality (1.5x, the default),
+  Balanced (1.7x), Performance (2.0x), Ultra Performance (3.0x) - instead of the start screen's resolution
+  (`fsr3_preset = native | quality | balanced | performance | ultra`); TAA's sharpness slider also sets FSR 3.1's. A
+  page taller than the screen (the advanced one at 720p) scrolls. The start screen's box is just "Anti-aliasing" (SMAA
+  when on, unless TAA was chosen in F12).
+- **Per-object motion vectors** (F12 *Advanced...*, on by default whenever motion vectors are used): the scene pass's
+  depth-tested draws run a variant of the game's vertex shader that also computes the previous frame's position from
+  that draw's previous constant buffers (the shader body emitted twice by the translator, `cb<k>` read as `pcb<k>`),
+  and their fragment shaders write the velocity to an extra RG16F-class target. A draw is matched to the previous
+  frame's by program, vertex buffer, draw parameters, game object and occurrence; a draw missing any previous block, or
+  whose block jumps (another object paired, a cut), marks its velocity unknown and the camera's is used there.
+  Measured walking (`tools/mv_check.py`, `MV_BOX` on the player): reprojection error on the player 22-24 -> 12
+  (camera-only vectors moved the player like the background); whole image 1.87 -> 1.67.
+- **TAA** (F12, *Anti-aliasing*: Off / SMAA / TAA; sharpness under *Advanced...*): the scene's draws on its depth are
+  jittered (Halton 2, 3 in the vertex shader, after the position the velocity uses), the complete HDR scene is resolved
+  just before the game's bloom (Catmull-Rom history, YCoCg variance clipping, the nearest velocity of the 3x3,
+  depth-checked disocclusion, tone-mapped blending), RCAS at the present. The interface is not touched (SMAA blurred
+  it). Frame-to-frame instability walking 10-17% lower than without; no trail behind the player.
+- **FSR 3.1** (F12, *Upscaler*: Bilinear / FSR 1 / FSR 3.1), when the render resolution is below the window's: AMD
+  FidelityFX SDK 1.1.4 through its C API and AMD's signed `amd_fidelityfx_vk.dll` (MIT; shipped next to the exe,
+  loaded at run time - without it, FSR 1). The newest FSR with a Vulkan backend: the FSR SDK 2.x (FSR 4) is DirectX 12
+  only. The scene is jittered with FSR's own sequence; FSR gets the game image, the scene depth, the motion vectors
+  (camera + per object) and a mask of the interface (the pixels that changed after the frame's first interface draw).
+  From 640x360 to 1280x720 it is visibly cleaner than FSR 1 (difference to native 5.14 vs 5.40). The backend asks for
+  debug-utils and AMD marker functions this device lacks: they get no-ops; `...KHR` names fall back to Vulkan 1.1 core.
+  Not yet checked: the interface mask over a moving scene (battles).
+- **Indirect light (GI)**, experimental, off by default (F12 *Indirect light (GI)*; its parameters under *Advanced...*):
+  one bounce of the visible light in screen space, after the design of FastGI (a Unity URP feature; the technique,
+  rewritten for this renderer - no code taken from it). Between the scene's opaque and blended draws: normals rebuilt
+  from the depth (the game has no normal buffer), rays traced at half / a third / a quarter of the resolution against
+  the depth with the game's own projection (cosine-distributed, quadratic steps, the first crossing refined by
+  bisection and validated: on the ray, facing it and the camera), the scene's colour where they hit (luminance
+  clamped), two bilateral blurs, accumulation along the camera motion vectors (depth-validated, neighbourhood-clamped),
+  an edge-aware upsample added onto the scene. Grass greens the curbs, fences and the foot of walls, the red roofs
+  their eaves. Defaults: intensity 200%, radius 300, thickness 25 (the game's units are ~cm), 4 rays x 8 steps, half
+  resolution. Measured at 1280x720 on an RTX 5070 Ti: +0.36 ms. Walking, the accumulated light has no trail behind the
+  player (brighter / darker differences against single-frame GI symmetric) and much less grain.
+- **F12 menu split**: the effects are switched on the first page (SSAO, GI, the shadow filter); their sliders and the
+  debug views moved to *Advanced...*. SSAO defaults are now intensity 200%, radius 100.
+- **SSAO accumulated over frames** (F12 *Accumulate over frames*, on by default with SSAO): the sample spiral turns
+  every frame and the result is blended with the previous one fetched along the camera motion vectors (90% history),
+  rejected where the stored distance is not the one the pixel had (uncovered ground, characters moving on their own)
+  and clamped to the current 3x3 range. Checked walking and stopping against single-frame SSAO
+  (`tools/ssao_temporal_check.py`): a first version with a 2% clamp margin left the player's contact shadow as a trail
+  that never faded (2-4% of pixels darker); with the exact clamp the differences are symmetric noise (~1% darker, ~1%
+  lighter) and nothing remains after stopping; high-frequency noise down 8-10%.
+- The F12 debug views (the occlusion alone, the motion vectors) are shown at the present, in place of the game image:
+  written into the scene they came out white or washed out by the game's fog, bloom and tone mapping.
+- **Ambient occlusion (SSAO)**, experimental and off by default (F12: on / off, intensity, radius, a view of the
+  occlusion alone): computed from the game's depth between its opaque and blended draws, with the game's own projection.
+
 ## 0.3.2 (2026-10-18)
 
 - **Fixes the launcher forgetting your settings** (0.3.1): it saved `larecomp.ini` with some lines run together, so

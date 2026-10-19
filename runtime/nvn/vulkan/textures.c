@@ -11,6 +11,8 @@
 #include "vk.h"
 #include "../astc.h"
 #include "../renderer.h"
+#include "../../settings.h"
+#include "../../ui2x.h"
 
 // ================================================================== formats
 // expand_rgb: converted to RGBA8 on upload - 1 RGB8, 2 RGBA4 and 3 RGB5A1 (16-bit, red in the low bits: the
@@ -204,6 +206,8 @@ bool renderer_texture_presented(NvnTexture *t) {
 void renderer_texture_scale(NvnTexture *t, float *sx, float *sy) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     if (b && b->scalable) { *sx = b->sx; *sy = b->sy; }
+    else if (b && b->font_k > 1) { *sx = *sy = b->font_k; }
+    else if (b && b->ui2x) { *sx = (float)b->ui2x_w / (float)t->width; *sy = (float)b->ui2x_h / (float)t->height; }
     else { *sx = 1; *sy = 1; }
 }
 
@@ -236,6 +240,25 @@ void vk_collect_dead(void) {
     ndead = k;
 }
 
+// The game's glyph caches (8-bit linear 2D textures the text is drawn from) are drawn again at K x on the host
+// (runtime/hle/font_hires.c): such a texture gets an image K times as large, filled from that K x copy instead of
+// guest memory. K, or 1 for every other texture.
+int font_hires_scale(uint64_t addr, uint32_t w, uint32_t h);
+bool font_hires_begin(uint64_t addr, const uint8_t **px, uint32_t *row, uint32_t *x0, uint32_t *y0, uint32_t *x1,
+                      uint32_t *y1);
+void font_hires_end(void);
+static int font_cache_k(const NvnTexture *t) {
+    if (t->target != 1 || !(t->flags & 0x10) || t->levels > 1 || !t->layout.fmt || t->layout.fmt->bpb != 1 || !t->addr) return 1;
+    return font_hires_scale(t->addr, t->width, t->height);
+}
+
+// The glyph caches' scale (runtime/hle/font_hires.c): one step per 720 lines of the window, up to 4 (1: off).
+int renderer_font_scale(void) {
+    uint32_t h = g_vk.sc_extent.height;
+    int k = (int)((h + 719) / 720);
+    return k < 1 ? 1 : k > 4 ? 4 : k;
+}
+
 static void create_image(NvnTexture *t, TexBackend *b) {
     VkFmt mf = fmt_of(t->format);
     b->sx = b->scalable ? g_rs_x : 1;
@@ -246,6 +269,9 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         if (tw < 1) tw = 1;
         if (th < 1) th = 1;
     }
+    b->font_k = font_cache_k(t);
+    if (b->font_k > 1) { tw *= b->font_k; th *= b->font_k; }
+    if (b->ui2x) tw = b->ui2x_w, th = b->ui2x_h;
     VkImageType type = VK_IMAGE_TYPE_2D;
     uint32_t layers = 1, depth = 1;
     switch (t->target) {
@@ -267,6 +293,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     uint32_t samples = t->samples > 1 ? t->samples : 1;
     if (samples > 1) levels = 1;
     VkFormat vf = mf.vf;
+    if (b->ui2x) vf = b->ui2x_fmt, levels = 1;
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     b->astc_bw = b->astc_bh = 0;
     if (!format_supports(vf, need)) {
@@ -440,6 +467,14 @@ static uint64_t hash_full(const uint8_t *p, uint64_t n) {
     return h ^ (h >> 31);
 }
 
+// A texture's content key (LARECOMP_TEXKEY_LOG=1: logged at each upload): runtime/ui2x.c's, of level 0's block rows
+// untiled - tools/ui_texkeys.py computes the same from the game files.
+static void texkey_log(const NvnTexture *t, const uint8_t *lin, uint64_t n, uint32_t bpb) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_TEXKEY_LOG") != NULL;
+    if (on) LOG("[texkey] %016llx %ux%u nvn %#x bpb %u levels %u\n", (unsigned long long)ui2x_key(lin, n), t->width, t->height, t->format, bpb, t->levels);
+}
+
 static uint64_t fnv_sample(const uint8_t *p, uint64_t n) {
     uint64_t h = 1469598103934665603ull;
     uint64_t step = n > 4096 ? n / 4096 : 1;
@@ -468,6 +503,101 @@ static void upload_pending(TexBackend *b) {
 }
 
 uint64_t prof_tex_checks, prof_tex_samples, prof_tex_full, prof_tex_full_bytes, prof_tex_dyn;
+// A glyph cache drawn at K x: the part of its K x copy that changed (all of it the first time).
+static void upload_font_cache(NvnTexture *t, TexBackend *b) {
+    const uint8_t *px;
+    uint32_t row, x0, y0, x1, y1;
+    if (!font_hires_begin(t->addr, &px, &row, &x0, &y0, &x1, &y1)) return;
+    if (!b->uploaded) { x0 = 0; y0 = 0; x1 = b->width; y1 = b->height; b->uploaded = true; }
+    if (x1 > b->width) x1 = b->width;
+    if (y1 > b->height) y1 = b->height;
+    if (x1 > x0 && y1 > y0 && row >= b->width) {
+        uint32_t w = x1 - x0, h = y1 - y0;
+        VkSpan s = vk_transient((uint64_t)w * h, 16);
+        for (uint32_t y = 0; y < h; y++) memcpy((uint8_t *)s.ptr + (uint64_t)y * w, px + (uint64_t)(y0 + y) * row + x0, w);
+        VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = w, .bufferImageHeight = h,
+                                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageOffset = {(int32_t)x0, (int32_t)y0, 0},
+                                .imageExtent = {w, h, 1}};
+        VkCommandBuffer cb = vk_upload_cmd();
+        vk_dl_note_upload((void *)b->image, w, h, 0);
+        vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    }
+    font_hires_end();
+}
+
+// A glyph cache drawn at K x (made so if it became one after its image was made): its K x copy is uploaded, whoever
+// owns the texture (the game's GPU writes into it are dropped or redone from that copy). False: any other texture.
+static bool font_cache_use(NvnTexture *t, TexBackend *b) {
+    {
+        int fk = font_cache_k(t);
+        if (fk != (b->font_k ? b->font_k : 1)) {  // (became a glyph cache after its image was made)
+            LOG("[vk] glyph cache %ux%u at %llx: drawn at %dx\n", t->width, t->height, (unsigned long long)t->addr, fk);
+            destroy_image(b);
+            create_image(t, b);
+            b->uploaded = false;
+        }
+        if (b->font_k > 1) { upload_font_cache(t, b); return true; }
+    }
+    return false;
+}
+
+// An interface texture with a 2x version (runtime/ui2x.c): a plain 2D texture of one level (not a render target or
+// linear: flags 8, 0x10), of the formats the
+// interface uses, whose level 0 untiled has a key in cache/ui2x.pak. True: b now holds the 2x image (made again at that
+// size and format when needed). False: not one (b back to the game's own size if it was one before).
+static bool ui2x_candidate(const NvnTexture *t) {
+    if (t->target != 1 || t->levels > 1 || (t->flags & 0x18) || !t->layout.fmt || t->layout.layers > 1) return false;
+    uint32_t f = t->format;  // BC1-BC5, BC7 (unorm / sRGB), RGBA8, RGB5A1 (the Pokemon icons), R8, RG8
+    return (f >= 0x42 && f <= 0x4e) || f == 0x25 || f == 0x01 || f == 0x0d || fmt_of(f).expand_rgb >= 2;
+}
+static bool ui2x_apply(NvnTexture *t, TexBackend *b, uint64_t data_hash) {
+    b->ui2x_hash = data_hash;
+    const FormatInfo *fi = t->layout.fmt;
+    LevelLayout l = tegra_level(&t->layout, 0);
+    uint64_t n = (uint64_t)l.wb * l.hb * fi->bpb;
+    uint8_t *lin = malloc(n);
+    Ui2xTex x = {0};
+    bool found = false;
+    if (lin) {
+        tegra_deswizzle((const uint8_t *)(uintptr_t)t->addr, lin, l.wb, l.hb, 1, fi->bpb, l.block_height_log2, l.block_depth_log2);
+        found = ui2x_find(ui2x_key(lin, n), t->width, t->height, &x);
+        free(lin);
+    }
+    static const VkFormat vkf[] = {VK_FORMAT_BC1_RGBA_UNORM_BLOCK, VK_FORMAT_BC3_UNORM_BLOCK, VK_FORMAT_BC4_UNORM_BLOCK,
+                                   VK_FORMAT_BC5_UNORM_BLOCK};
+    if (!found) {
+        if (b->ui2x) { b->ui2x = 0; destroy_image(b); create_image(t, b); }
+        return false;
+    }
+    VkFormat f = vkf[x.fmt & 3];
+    if (fmt_of(t->format).vf == VK_FORMAT_BC1_RGBA_SRGB_BLOCK || fmt_of(t->format).vf == VK_FORMAT_BC3_SRGB_BLOCK ||
+        fmt_of(t->format).vf == VK_FORMAT_BC7_SRGB_BLOCK || fmt_of(t->format).vf == VK_FORMAT_BC2_SRGB_BLOCK)
+        f = f == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK : f == VK_FORMAT_BC3_UNORM_BLOCK ? VK_FORMAT_BC3_SRGB_BLOCK : f;
+    if (!b->ui2x || b->ui2x_fmt != f || b->ui2x_w != x.w || b->ui2x_h != x.h || !b->image) {
+        b->ui2x = 1, b->ui2x_fmt = f, b->ui2x_w = x.w, b->ui2x_h = x.h;
+        destroy_image(b);
+        create_image(t, b);
+    }
+    if (b->format != f) {  // (the format isn't there: the game's own)
+        b->ui2x = 0;
+        destroy_image(b);
+        create_image(t, b);
+        free(x.data);
+        return false;
+    }
+    VkSpan s = vk_transient(x.size, 16);
+    memcpy(s.ptr, x.data, x.size);
+    free(x.data);
+    VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = (x.w + 3) / 4 * 4, .bufferImageHeight = (x.h + 3) / 4 * 4,
+                            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {x.w, x.h, 1}};
+    VkCommandBuffer cb = vk_upload_cmd();
+    vk_dl_note_upload((void *)b->image, x.w, x.h, 0);
+    vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    static int nlog;
+    if (nlog++ < 8) LOG("[ui2x] texture %ux%u fmt %#x at %llx -> %ux%u\n", t->width, t->height, t->format, (unsigned long long)t->addr, x.w, x.h);
+    return true;
+}
+
 static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (!t->addr || t->target == 10) return;
     uint64_t frame = vk_frame_counter();
@@ -499,6 +629,8 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (b->uploaded && h != b->data_hash) b->dynamic = true;
     b->data_hash = h;
     b->uploaded = true;
+    // the interface at 2x (runtime/ui2x.c): checked whenever the data is new
+    if ((b->ui2x || (ui2x_candidate(t) && ui2x_enabled())) && ui2x_apply(t, b, h)) return;
     if (b->format != mf.vf && !b->astc_bw) return;  // unsupported format: nothing sensible to copy
     VkCommandBuffer cb = vk_upload_cmd();
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
@@ -514,6 +646,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 uint8_t *blocks = malloc((uint64_t)l.wb * l.hb * 16);
                 if (linear) for (uint32_t y = 0; y < l.hb; y++) memcpy(blocks + (uint64_t)y * l.wb * 16, src + (uint64_t)y * t->stride, l.wb * 16);
                 else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
+                if (lv == 0 && layer == 0) texkey_log(t, blocks, (uint64_t)l.wb * l.hb * 16, 16);
                 VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
                 astc_decode_ldr(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
                 free(blocks);
@@ -536,6 +669,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             } else {
                 tegra_deswizzle(src, lin, l.wb, l.hb, l.d, fi->bpb, l.block_height_log2, l.block_depth_log2);
             }
+            if (lv == 0 && layer == 0 && l.d == 1) texkey_log(t, lin, (uint64_t)row * l.hb, fi->bpb);
             static int dump_fmt = -2;  // LARECOMP_DUMP_TEX_FMT=<nvn format>: level 0 of those textures, untiled -> build/tex/
             if (dump_fmt == -2) dump_fmt = getenv("LARECOMP_DUMP_TEX_FMT") ? (int)strtol(getenv("LARECOMP_DUMP_TEX_FMT"), NULL, 0) : -1;
             if ((int)t->format == dump_fmt && lv == 0 && layer == 0) {
@@ -636,6 +770,7 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     if (t->addr && !for_render) dirty_check(t, b);
     if (b->pending_rgba) upload_pending(b);
     if (for_render) b->gpu_owned = true;
+    else if ((b->font_k > 1 || t->flags & 0x10) && font_cache_use(t, b)) return b;
     else if (!b->gpu_owned) {
         extern uint64_t prof_up_ns;
         uint64_t t0 = prof_up_ns != ~0ull ? SDL_GetTicksNS() : 0;
@@ -645,7 +780,11 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     return b;
 }
 
-void renderer_mark_gpu_owned(NvnTexture *t) { tex_backend(t)->gpu_owned = true; }
+void renderer_mark_gpu_owned(NvnTexture *t) {
+    TexBackend *b = tex_backend(t);
+    b->gpu_owned = true;
+    if (b->font_k > 1) b->uploaded = false;  // (a glyph cache the GPU wrote: all of its K x copy again)
+}
 bool renderer_is_gpu_owned(NvnTexture *t) { return tex_backend(t)->gpu_owned; }
 // Host-produced texel data (decoded video, any thread): applied on the render thread at the texture's next use.
 void renderer_upload_rgba(NvnTexture *t, const void *rgba, uint32_t w, uint32_t h, uint32_t stride) {
@@ -820,12 +959,13 @@ static VkCompareOp compare_op(uint32_t f) {
     }
 }
 
-VkSampler vk_sampler(NvnSamplerDesc *d) {
-    if (d->backend) return (VkSampler)d->backend;
+// shadow_linear: a depth-compare sampler filters bilinearly whatever the game asked (the shadow filter, F12 menu)
+static VkSampler sampler_create(const NvnSamplerDesc *d, bool shadow_linear) {
     VkSamplerCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     si.magFilter = d->mag_filter == 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     uint32_t mf = d->min_filter;
     si.minFilter = (mf == 1 || mf == 3 || mf == 5) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    if (d->compare_mode && shadow_linear) si.magFilter = si.minFilter = VK_FILTER_LINEAR;
     si.mipmapMode = mf == 4 || mf == 5 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
     VkSamplerAddressMode modes[3];
     bool border = false;
@@ -879,7 +1019,32 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     }
     VkSampler s;
     VK_CHECK(vkCreateSampler(g_vk.dev, &si, NULL, &s));
-    d->backend = (void *)s;
+    return s;
+}
+
+// Let's Go's shadow map is sampled with nearest filtering (each of its 11 taps a hard in / out: stair-stepped edges);
+// SHADOW_BILINEAR / SHADOW_SMOOTH make each tap a bilinear compare (2x2 PCF), the depth formats permitting. Depth-
+// compare samplers live in their own table, by description and filter, so a change in the menu takes at once.
+VkSampler vk_sampler(NvnSamplerDesc *d) {
+    if (!d->compare_mode) {
+        if (!d->backend) d->backend = (void *)sampler_create(d, false);
+        return (VkSampler)d->backend;
+    }
+    static int linear_ok = -1;
+    if (linear_ok < 0) {
+        linear_ok = format_supports(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) &&
+                    format_supports(VK_FORMAT_D32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
+        LOG("[vk] shadow map: %s\n", linear_ok ? "bilinear compare available" : "no linear filtering on depth formats, the game's filter");
+    }
+    bool lin = linear_ok && g_settings.shadow_filter != SHADOW_GAME;
+    static struct { NvnSamplerDesc d; bool lin; VkSampler s; } tab[64];
+    static int n;
+    NvnSamplerDesc k = *d;
+    k.backend = NULL;
+    for (int i = 0; i < n; i++)
+        if (tab[i].lin == lin && !memcmp(&tab[i].d, &k, sizeof k)) return tab[i].s;
+    VkSampler s = sampler_create(&k, lin);
+    if (n < 64) tab[n].d = k, tab[n].lin = lin, tab[n].s = s, n++;  // (past 64: a new one each time - not seen in the game)
     return s;
 }
 

@@ -419,6 +419,508 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1.0);\n"
                "}\n";
     }
+    // SSAO (F12 menu; exec.c ssao_run): on the game's depth, between its opaque and its blended draws. a = the game's
+    // projection (P00, P11, A, B: GL style, z_ndc = (A z + B) / -z, so the distance along the view axis is
+    // B / (z_ndc + A)); b.z = 1 when depth was stored as (z_ndc + 1) / 2 (NVN's -1..1 mode). Positions are rebuilt
+    // in view space (x right, y as the image, z the distance: one handedness throughout), the normal from the nearer
+    // neighbours (no smearing across silhouettes).
+    if (!strcmp(name, "ssao.frag") || !strcmp(name, "ssao_blur.frag") || !strcmp(name, "ssao_temporal.frag")) {
+        *stage = STAGE_FRAGMENT;
+        static const char *common =
+            "#version 450\n"
+            "layout(push_constant) uniform P { vec4 a; vec4 b; vec4 c; } pc;\n"
+            "layout(location = 0) out vec4 o;\n"
+            "float lin(float d) { return pc.a.w / ((pc.b.z > 0.5 ? d * 2.0 - 1.0 : d) + pc.a.z); }\n";
+        // b.x = radius (world units), b.y = intensity, b.w = the largest screen radius in pixels. 16 samples on a
+        // spiral turned per pixel (interleaved gradient noise; the blur evens it out), denser near the centre;
+        // c.x turns it per frame too (temporal accumulation: other directions every frame).
+        static const char *ao =
+            "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+            "ivec2 sz;\n"
+            "vec3 vpos(ivec2 p) {\n"
+            "  p = clamp(p, ivec2(0), sz - 1);\n"
+            "  float l = lin(texelFetch(dep, p, 0).r);\n"
+            "  vec2 ndc = (vec2(p) + 0.5) / vec2(sz) * 2.0 - 1.0;\n"
+            "  return vec3(ndc.x * l / pc.a.x, ndc.y * l / pc.a.y, l);\n"
+            "}\n"
+            "void main() {\n"
+            "  sz = textureSize(dep, 0);\n"
+            "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+            "  if (texelFetch(dep, p, 0).r >= 0.999999) { o = vec4(1.0); return; }\n"
+            "  vec3 c = vpos(p), l = vpos(p - ivec2(1, 0)), r = vpos(p + ivec2(1, 0)), u = vpos(p - ivec2(0, 1)), d = vpos(p + ivec2(0, 1));\n"
+            "  vec3 dx = abs(r.z - c.z) < abs(c.z - l.z) ? r - c : c - l;\n"
+            "  vec3 dy = abs(d.z - c.z) < abs(c.z - u.z) ? d - c : c - u;\n"
+            "  vec3 n = normalize(cross(dx, dy));\n"
+            "  if (dot(n, c) > 0.0) n = -n;\n"
+            "  float rad = pc.b.x;\n"
+            "  float rpx = min(rad * pc.a.x / c.z * 0.5 * float(sz.x), pc.b.w);\n"
+            "  if (rpx < 1.0) { o = vec4(1.0); return; }\n"
+            "  float ang = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + pc.c.x);\n"
+            "  float occ = 0.0, bias = 0.02 * c.z;\n"
+            "  for (int i = 0; i < 16; i++) {\n"
+            "    float t = (float(i) + 0.5) / 16.0, a = ang + float(i) * 2.39996323;\n"
+            "    vec3 v = vpos(p + ivec2(vec2(cos(a), sin(a)) * (t * rpx + 1.0))) - c;\n"
+            "    float vv = dot(v, v);\n"
+            "    float cosv = (dot(v, n) - bias) * inversesqrt(vv + 1e-3);\n"
+            "    occ += max(cosv, 0.0) * clamp(1.0 - vv / (rad * rad), 0.0, 1.0);\n"
+            "  }\n"
+            "  o = vec4(clamp(1.0 - pc.b.y * occ * (2.0 / 16.0), 0.0, 1.0), 0.0, 0.0, 1.0);\n"
+            "}\n";
+        // Depth-aware blur along b.xy (one texel steps), 9 taps: neighbours more than a few % farther or nearer than
+        // the centre don't count (no halo around silhouettes).
+        static const char *blur =
+            "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D dep;\n"
+            "void main() {\n"
+            "  ivec2 sz = textureSize(t, 0), p = ivec2(gl_FragCoord.xy);\n"
+            "  float l0 = lin(texelFetch(dep, p, 0).r), s = 0.0, w = 0.0;\n"
+            "  for (int i = -4; i <= 4; i++) {\n"
+            "    ivec2 q = clamp(p + ivec2(pc.b.xy * float(i)), ivec2(0), sz - 1);\n"
+            "    float dl = abs(lin(texelFetch(dep, q, 0).r) - l0) / (0.04 * l0);\n"
+            "    float k = exp(-float(i * i) / 10.0) * max(1.0 - dl, 0.0);\n"
+            "    s += texelFetch(t, q, 0).r * k; w += k;\n"
+            "  }\n"
+            "  o = vec4(w > 0.0 ? s / w : texelFetch(t, p, 0).r, 0.0, 0.0, 1.0);\n"
+            "}\n";
+        // Temporal accumulation (exec.c ssao_run): t = this frame's blurred occlusion, dep = depth, mv = the camera
+        // motion vectors (xy velocity, z previous / current distance), hist = the previous result (r occlusion,
+        // g its distance). The history is fetched where the pixel was; it counts only if the distance stored there is
+        // the one the pixel had then (else: uncovered, or a character moving on its own - camera vectors don't know
+        // it), and clamped to this frame's 3x3 range - exactly: with any slack the history stayed that much darker for
+        // good where a character's contact shadow had passed (a fixed point of the blend: tools/ssao_temporal_check.py).
+        // b.y = the history's weight, b.w = 1: no history (a cut, the
+        // first frame). Out: r = the occlusion, g = this distance (the next frame's history).
+        static const char *temporal =
+            "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D dep;\n"
+            "layout(set = 0, binding = 2) uniform sampler2D mv;\n"
+            "layout(set = 0, binding = 3) uniform sampler2D hist;\n"
+            "void main() {\n"
+            "  ivec2 sz = textureSize(t, 0), p = ivec2(gl_FragCoord.xy);\n"
+            "  float d = texelFetch(dep, p, 0).r, l = lin(d), a = texelFetch(t, p, 0).r;\n"
+            "  if (d >= 0.999999 || pc.b.w > 0.5) { o = vec4(a, l, 0.0, 1.0); return; }\n"
+            "  float mn = a, mx = a;\n"
+            "  for (int y = -1; y <= 1; y++)\n"
+            "    for (int x = -1; x <= 1; x++) {\n"
+            "      float c = texelFetch(t, clamp(p + ivec2(x, y), ivec2(0), sz - 1), 0).r;\n"
+            "      mn = min(mn, c); mx = max(mx, c);\n"
+            "    }\n"
+            "  vec4 m = texelFetch(mv, p, 0);\n"
+            "  vec2 puv = (vec2(p) + 0.5) / vec2(sz) - m.xy;\n"
+            "  float w = 0.0, h = a;\n"
+            "  if (all(greaterThanEqual(puv, vec2(0.0))) && all(lessThan(puv, vec2(1.0)))) {\n"
+            "    float lh = texelFetch(hist, ivec2(puv * vec2(sz)), 0).g, le = m.z * l;\n"
+            "    if (abs(lh - le) < 0.02 * le + 1.0) {\n"
+            "      w = pc.b.y;\n"
+            "      h = clamp(texture(hist, puv).r, mn, mx);\n"
+            "    }\n"
+            "  }\n"
+            "  o = vec4(mix(a, h, w), l, 0.0, 1.0);\n"
+            "}\n";
+        static char *src[3];
+        int k = !strcmp(name, "ssao_blur.frag") ? 1 : !strcmp(name, "ssao_temporal.frag") ? 2 : 0;
+        if (!src[k]) {
+            const char *body = k == 2 ? temporal : k ? blur : ao;
+            size_t n = strlen(common) + strlen(body) + 1;
+            src[k] = malloc(n);
+            snprintf(src[k], n, "%s%s", common, body);
+        }
+        return src[k];
+    }
+    // ---- Screen-space indirect light, one bounce (F12 GI; exec.c gi_run), after FastGI's design: rays traced at a
+    // reduced resolution against the depth, the scene's own colour where they hit, two bilateral blurs, an optional
+    // temporal accumulation along the camera motion vectors, then an edge-aware upsample added onto the scene.
+    // View space as in the SSAO (x right, y as the image, z the distance), the normals rebuilt from the depth (the
+    // game has no normal buffer). a = the projection (P00, P11, A, B), d.x = 1: depth stored as (z_ndc + 1) / 2,
+    // d.zw = the GI resolution. World units: the game's (~cm).
+    if (!strncmp(name, "gi_", 3)) {
+        *stage = STAGE_FRAGMENT;
+        static const char *common =
+            "#version 450\n"
+            "layout(push_constant) uniform P { vec4 a; vec4 b; vec4 c; vec4 d; } pc;\n"
+            "layout(location = 0) out vec4 o;\n"
+            "float lin(float d) { return pc.a.w / ((pc.d.x > 0.5 ? d * 2.0 - 1.0 : d) + pc.a.z); }\n"
+            "vec3 vpos(vec2 uv, float l) { vec2 n = uv * 2.0 - 1.0; return vec3(n.x * l / pc.a.x, n.y * l / pc.a.y, l); }\n"
+            "vec2 puv(vec3 p) { return vec2(p.x * pc.a.x, p.y * pc.a.y) / p.z * 0.5 + 0.5; }\n"
+            // the GI pixel's centre in uv, and the full-size pixel under it
+            "vec2 low_uv() { return (floor(gl_FragCoord.xy) + 0.5) / pc.d.zw; }\n"
+            // bilateral weight of a tap: depth within ~1.5% (2 units at least), normals alike
+            "float geo(float l0, float l1, vec3 n0, vec3 n1) {\n"
+            "  float w = clamp(1.0 - abs(l0 - l1) / max(2.0, l0 * 0.015), 0.0, 1.0) * step(0.001, l1);\n"
+            "  float nw = clamp(dot(n0, n1), 0.0, 1.0);\n"
+            "  nw *= nw;\n"
+            "  return w * nw * nw;\n"
+            "}\n"
+            "vec3 dec_n(vec4 e) { return normalize(e.xyz * 2.0 - 1.0); }\n";
+        // Normals (full size, RGBA8: n * 0.5 + 0.5, a = 0 on the sky) from the depth: the nearer neighbour on each
+        // axis (no smearing across silhouettes), facing the camera
+        static const char *normal =
+            "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+            "ivec2 sz;\n"
+            "vec3 at(ivec2 p) { p = clamp(p, ivec2(0), sz - 1); return vpos((vec2(p) + 0.5) / vec2(sz), lin(texelFetch(dep, p, 0).r)); }\n"
+            "void main() {\n"
+            "  sz = textureSize(dep, 0);\n"
+            "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+            "  if (texelFetch(dep, p, 0).r >= 0.999999) { o = vec4(0.5, 0.5, 0.5, 0.0); return; }\n"
+            "  vec3 c = at(p), l = at(p - ivec2(1, 0)), r = at(p + ivec2(1, 0)), u = at(p - ivec2(0, 1)), d = at(p + ivec2(0, 1));\n"
+            "  vec3 dx = abs(r.z - c.z) < abs(c.z - l.z) ? r - c : c - l;\n"
+            "  vec3 dy = abs(d.z - c.z) < abs(c.z - u.z) ? d - c : c - u;\n"
+            "  vec3 n = normalize(cross(dx, dy));\n"
+            "  if (dot(n, c) > 0.0) n = -n;\n"
+            "  o = vec4(n * 0.5 + 0.5, 1.0);\n"
+            "}\n";
+        // Trace (GI size, RGBA16F: rgb the gathered light, a the distance). b = (radius, thickness, origin bias,
+        // max receiver distance), c = (rays, steps, frame turn, luminance clamp), d.y = hit rejection strength.
+        // Per ray: cosine-distributed around the normal, steps placed quadratically (dense near the origin); the first
+        // depth crossing is refined twice by bisection and is the end of the ray, hit or not (no leaking through
+        // walls); a hit counts if within the thickness, faces the ray, lies on the ray (not just inside a depth slab)
+        // and faces the camera - FastGI's validation. Its light: the scene pixel there, point sampled, luminance clamped.
+        static const char *trace =
+            "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D nrm;\n"
+            "layout(set = 0, binding = 2) uniform sampler2D scene;\n"
+            "void main() {\n"
+            "  vec2 fs = vec2(textureSize(dep, 0)), cs = vec2(textureSize(scene, 0));\n"
+            "  vec2 uv = low_uv();\n"
+            "  ivec2 fp = ivec2(uv * fs);\n"
+            "  float d0 = texelFetch(dep, fp, 0).r;\n"
+            "  if (d0 >= 0.999999) { o = vec4(0.0); return; }\n"
+            "  float l0 = lin(d0);\n"
+            "  vec4 ne = texelFetch(nrm, fp, 0);\n"
+            "  if (l0 >= pc.b.w || ne.a < 0.5) { o = vec4(0.0, 0.0, 0.0, l0); return; }\n"
+            "  vec3 n = dec_n(ne);\n"
+            "  vec3 org = vpos((vec2(fp) + 0.5) / fs, l0) + n * pc.b.z;\n"
+            "  vec3 ax = abs(n.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);\n"
+            "  vec3 tg = normalize(cross(ax, n)), bt = cross(n, tg);\n"
+            "  float noise = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715))) + pc.c.z);\n"
+            "  int rays = int(pc.c.x), steps = int(pc.c.y);\n"
+            "  float R = pc.b.x, th = pc.b.y, bias = pc.b.z;\n"
+            "  vec3 rad = vec3(0.0);\n"
+            "  for (int ray = 0; ray < rays; ray++) {\n"
+            "    float u = (float(ray) + 0.5) / float(rays), an = 6.2831853 * fract(noise + float(ray) * 0.618034);\n"
+            "    vec3 dir = tg * (sqrt(u) * cos(an)) + bt * (sqrt(u) * sin(an)) + n * sqrt(1.0 - u);\n"
+            "    float prev = 0.0;\n"
+            "    for (int i = 0; i < steps; i++) {\n"
+            "      float t = (float(i) + 0.75 + noise * 0.25) / float(steps), dist = R * t * t;\n"
+            "      vec3 p = org + dir * dist;\n"
+            "      if (p.z <= 1.0) break;\n"
+            "      vec2 h = puv(p);\n"
+            "      if (any(lessThanEqual(h, vec2(0.0))) || any(greaterThanEqual(h, vec2(1.0)))) break;\n"
+            "      float sd = texelFetch(dep, ivec2(h * fs), 0).r;\n"
+            "      if (sd >= 0.999999) { prev = dist; continue; }\n"
+            "      float delta = p.z - lin(sd);\n"
+            "      if (delta < 0.0) { prev = dist; continue; }\n"
+            "      float lo = prev, hi = dist;\n"
+            "      for (int k = 0; k < 2; k++) {\n"
+            "        float mid = (lo + hi) * 0.5;\n"
+            "        vec3 mp = org + dir * mid;\n"
+            "        vec2 mh = puv(mp);\n"
+            "        if (any(lessThanEqual(mh, vec2(0.0))) || any(greaterThanEqual(mh, vec2(1.0)))) break;\n"
+            "        float md = texelFetch(dep, ivec2(mh * fs), 0).r, mdel = mp.z - lin(md);\n"
+            "        if (md < 0.999999 && mdel >= 0.0) { hi = mid; h = mh; sd = md; delta = mdel; } else lo = mid;\n"
+            "      }\n"
+            "      dist = hi;\n"
+            "      t = sqrt(hi / R);\n"
+            "      if (delta <= th && dist > bias * 2.0) {\n"
+            "        ivec2 hp = ivec2(h * fs);\n"
+            "        vec3 hn = dec_n(texelFetch(nrm, hp, 0));\n"
+            "        float facing = clamp(dot(hn, -dir) * 4.0, 0.0, 1.0), conf = 1.0;\n"
+            "        if (pc.d.y > 0.0) {\n"
+            "          float hl = lin(sd);\n"
+            "          vec3 hit = vpos((vec2(hp) + 0.5) / fs, hl), to = hit - org;\n"
+            "          float along = dot(to, dir), off = length(to - dir * along);\n"
+            "          float foot = 2.0 * hl / (fs.y * pc.a.y);\n"
+            "          float g = clamp(1.0 - off / max(1.0, min(th * 0.25, 10.0) + foot * 1.5), 0.0, 1.0);\n"
+            "          vec3 ad = to * inversesqrt(max(dot(to, to), 1e-6));\n"
+            "          g *= smoothstep(0.0, 0.15, dot(n, ad)) * smoothstep(0.0, 0.15, dot(hn, -ad));\n"
+            "          g *= smoothstep(0.05, 0.25, dot(hn, normalize(-hit)));\n"
+            "          g *= step(bias, along) * step(along, R);\n"
+            "          conf = mix(1.0, g, pc.d.y);\n"
+            "        }\n"
+            "        vec2 e = min(h, 1.0 - h);\n"
+            "        float fade = clamp(min(e.x, e.y) * 20.0, 0.0, 1.0) * (1.0 - t * t);\n"
+            "        vec3 col = max(texelFetch(scene, ivec2(h * cs), 0).rgb, vec3(0.0));\n"
+            "        col *= min(1.0, pc.c.w / max(dot(col, vec3(0.2126, 0.7152, 0.0722)), 1e-4));\n"
+            "        rad += col * facing * fade * conf;\n"
+            "      }\n"
+            "      break;\n"
+            "    }\n"
+            "  }\n"
+            "  float df = clamp((pc.b.w - l0) / max(1.0, pc.b.w * 0.2), 0.0, 1.0);\n"
+            "  o = vec4(rad * (df / float(rays)), l0);\n"
+            "}\n";
+        // Bilateral blur along b.xy (GI pixels), 5 taps at b.z spacing
+        static const char *blur =
+            "layout(set = 0, binding = 0) uniform sampler2D gi;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D nrm;\n"
+            "void main() {\n"
+            "  ivec2 ls = ivec2(pc.d.zw), p = ivec2(gl_FragCoord.xy);\n"
+            "  vec2 fs = vec2(textureSize(nrm, 0));\n"
+            "  vec4 c = texelFetch(gi, p, 0);\n"
+            "  if (c.a <= 0.0) { o = vec4(0.0); return; }\n"
+            "  vec3 n = dec_n(texelFetch(nrm, ivec2(low_uv() * fs), 0));\n"
+            "  vec3 s = c.rgb;\n"
+            "  float ws = 1.0;\n"
+            "  for (int k = -2; k <= 2; k++) {\n"
+            "    if (k == 0) continue;\n"
+            "    ivec2 q = clamp(p + ivec2(pc.b.xy * (sign(float(k)) * floor(abs(float(k)) * pc.b.z + 0.5))), ivec2(0), ls - 1);\n"
+            "    vec4 tp = texelFetch(gi, q, 0);\n"
+            "    vec3 tn = dec_n(texelFetch(nrm, ivec2((vec2(q) + 0.5) / pc.d.zw * fs), 0));\n"
+            "    float w = (abs(k) == 1 ? 0.75 : 0.375) * geo(c.a, tp.a, n, tn);\n"
+            "    s += tp.rgb * w; ws += w;\n"
+            "  }\n"
+            "  o = vec4(s / ws, c.a);\n"
+            "}\n";
+        // Temporal (GI size): the history where the pixel was (camera motion vectors at full size: xy velocity, z
+        // previous / current distance), each of its 4 bilinear taps kept only at the expected distance, clamped to
+        // this frame's neighbourhood (+15% of its range), weight b.y lowered with screen motion; b.w = 1: no history.
+        static const char *temporal =
+            "layout(set = 0, binding = 0) uniform sampler2D cur;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D mv;\n"
+            "layout(set = 0, binding = 2) uniform sampler2D hist;\n"
+            "void main() {\n"
+            "  ivec2 ls = ivec2(pc.d.zw), p = ivec2(gl_FragCoord.xy);\n"
+            "  vec4 c = texelFetch(cur, p, 0);\n"
+            "  if (c.a <= 0.0 || pc.b.w > 0.5) { o = c; return; }\n"
+            "  vec2 uv = low_uv();\n"
+            "  vec4 m = texelFetch(mv, ivec2(uv * vec2(textureSize(mv, 0))), 0);\n"
+            "  vec2 pv = uv - m.xy;\n"
+            "  if (any(lessThanEqual(pv, vec2(0.0))) || any(greaterThanEqual(pv, vec2(1.0)))) { o = c; return; }\n"
+            "  float le = m.z * c.a;\n"
+            "  vec2 px = pv * pc.d.zw - 0.5, b0 = floor(px), f = px - b0;\n"
+            "  vec3 h = vec3(0.0);\n"
+            "  float ws = 0.0;\n"
+            "  for (int y = 0; y < 2; y++)\n"
+            "    for (int x = 0; x < 2; x++) {\n"
+            "      vec4 tp = texelFetch(hist, clamp(ivec2(b0) + ivec2(x, y), ivec2(0), ls - 1), 0);\n"
+            "      vec2 bl = mix(1.0 - f, f, vec2(x, y));\n"
+            "      float w = bl.x * bl.y * step(0.001, tp.a) * clamp(1.0 - abs(tp.a - le) / max(2.5, le * 0.01), 0.0, 1.0);\n"
+            "      h += tp.rgb * w; ws += w;\n"
+            "    }\n"
+            "  if (ws < 0.05) { o = c; return; }\n"
+            "  h /= ws;\n"
+            "  vec3 lo = c.rgb, hi = c.rgb;\n"
+            "  const ivec2 nb[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));\n"
+            "  for (int i = 0; i < 4; i++) {\n"
+            "    vec4 tp = texelFetch(cur, clamp(p + nb[i], ivec2(0), ls - 1), 0);\n"
+            "    if (tp.a > 0.0 && abs(tp.a - c.a) < max(2.5, c.a * 0.01)) { lo = min(lo, tp.rgb); hi = max(hi, tp.rgb); }\n"
+            "  }\n"
+            "  vec3 mg = (hi - lo) * 0.15 + 0.001;\n"
+            "  h = clamp(h, max(vec3(0.0), lo - mg), hi + mg);\n"
+            "  float w = pc.b.y * clamp(ws, 0.0, 1.0) / (1.0 + length(m.xy * pc.d.zw) * 0.1);\n"
+            "  o = vec4(mix(c.rgb, h, w), c.a);\n"
+            "}\n";
+        // Composite (full size): the GI's 4 nearest pixels, bilinear x bilateral; b.x = strength (intensity x
+        // reflectance). Added onto the scene (exec.c: additive blending, colour only); b.y = 1 the debug view: the
+        // light alone, b.z x it, tone mapped (x / (1 + x)) into RGBA8.
+        static const char *composite =
+            "layout(set = 0, binding = 0) uniform sampler2D gi;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D dep;\n"
+            "layout(set = 0, binding = 2) uniform sampler2D nrm;\n"
+            "void main() {\n"
+            "  ivec2 fsz = textureSize(dep, 0), ls = ivec2(pc.d.zw);\n"
+            "  vec2 uv = gl_FragCoord.xy * pc.c.xy;\n"
+            "  ivec2 fp = clamp(ivec2(uv * vec2(fsz)), ivec2(0), fsz - 1);\n"
+            "  float d0 = texelFetch(dep, fp, 0).r;\n"
+            "  vec3 g = vec3(0.0);\n"
+            "  if (d0 < 0.999999) {\n"
+            "    float l0 = lin(d0);\n"
+            "    vec3 n = dec_n(texelFetch(nrm, fp, 0));\n"
+            "    vec2 px = uv * pc.d.zw - 0.5, b0 = floor(px), f = px - b0;\n"
+            "    float ws = 0.0;\n"
+            "    for (int y = 0; y < 2; y++)\n"
+            "      for (int x = 0; x < 2; x++) {\n"
+            "        ivec2 q = clamp(ivec2(b0) + ivec2(x, y), ivec2(0), ls - 1);\n"
+            "        vec4 tp = texelFetch(gi, q, 0);\n"
+            "        vec3 tn = dec_n(texelFetch(nrm, ivec2((vec2(q) + 0.5) / pc.d.zw * vec2(fsz)), 0));\n"
+            "        vec2 bl = mix(1.0 - f, f, vec2(x, y));\n"
+            "        float w = bl.x * bl.y * geo(l0, tp.a, n, tn);\n"
+            "        g += tp.rgb * w; ws += w;\n"
+            "      }\n"
+            "    g = g / max(ws, 1e-4) * pc.b.x;\n"
+            "  }\n"
+            "  if (pc.b.y > 0.5) { g *= pc.b.z; o = vec4(g / (1.0 + g), 1.0); }\n"
+            "  else o = vec4(g, 0.0);\n"
+            "}\n";
+        static char *src[5];
+        int k = !strcmp(name, "gi_normal.frag") ? 0 : !strcmp(name, "gi_trace.frag") ? 1 : !strcmp(name, "gi_blur.frag") ? 2
+              : !strcmp(name, "gi_temporal.frag") ? 3 : !strcmp(name, "gi_composite.frag") ? 4 : -1;
+        if (k < 0) return NULL;
+        if (!src[k]) {
+            const char *bodies[5] = {normal, trace, blur, temporal, composite};
+            size_t n = strlen(common) + strlen(bodies[k]) + 1;
+            src[k] = malloc(n);
+            snprintf(src[k], n, "%s%s", common, bodies[k]);
+        }
+        return src[k];
+    }
+    // TAA (exec.c taa_run), on the game's HDR scene before its bloom: t = this frame (jittered), h = the history (rgb,
+    // a = its distance), mv = the motion vectors (xy velocity, z previous / current distance), dep = depth.
+    // a = the projection (P00, P11, A, B), b = (reset, history weight, depth mode, 0). Blended in a tone-mapped space
+    // (c / (1 + max c): no fireflies from the bright highlights); the velocity of the nearest of the 3x3 (edges keep the
+    // foreground's); the history by Catmull-Rom, clipped to the 3x3's YCoCg mean +- 1.25 sigma (variance clipping),
+    // dropped where its distance is not the one expected (uncovered). Out: rgb, a = this distance.
+    if (!strcmp(name, "taa.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D h;\n"
+               "layout(set = 0, binding = 2) uniform sampler2D mv;\n"
+               "layout(set = 0, binding = 3) uniform sampler2D dep;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "float lin(float d) { return pc.a.w / ((pc.b.z > 0.5 ? d * 2.0 - 1.0 : d) + pc.a.z); }\n"
+               "vec3 tm(vec3 c) { return c / (1.0 + max(c.r, max(c.g, c.b))); }\n"
+               "vec3 itm(vec3 c) { return c / max(1.0 - max(c.r, max(c.g, c.b)), 1e-4); }\n"
+               "vec3 ycc(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }\n"
+               "vec3 rgb(vec3 y) { return vec3(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z); }\n"
+               "vec3 cat(vec2 uv, vec2 sz) {\n"  // Catmull-Rom, 5 bilinear taps (the corners dropped)
+               "  vec2 sp = uv * sz, tp = floor(sp - 0.5) + 0.5, f = sp - tp;\n"
+               "  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+               "  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);\n"
+               "  vec2 w12 = w1 + w2, t0 = (tp - 1.0) / sz, t3 = (tp + 2.0) / sz, t12 = (tp + w2 / w12) / sz;\n"
+               "  vec3 r = texture(h, vec2(t12.x, t0.y)).rgb * (w12.x * w0.y) + texture(h, vec2(t0.x, t12.y)).rgb * (w0.x * w12.y)\n"
+               "         + texture(h, t12).rgb * (w12.x * w12.y) + texture(h, vec2(t3.x, t12.y)).rgb * (w3.x * w12.y)\n"
+               "         + texture(h, vec2(t12.x, t3.y)).rgb * (w12.x * w3.y);\n"
+               "  float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;\n"
+               "  return max(r / ws, vec3(0.0));\n"
+               "}\n"
+               "void main() {\n"
+               "  ivec2 sz = textureSize(t, 0), p = ivec2(gl_FragCoord.xy);\n"
+               "  ivec2 dsz = textureSize(dep, 0);\n"
+               "  vec3 c = max(texelFetch(t, p, 0).rgb, vec3(0.0));\n"
+               "  vec2 dsc = vec2(dsz) / vec2(sz);\n"
+               "  float l = lin(texelFetch(dep, min(ivec2(vec2(p) * dsc), dsz - 1), 0).r);\n"
+               "  if (pc.b.x > 0.5) { o = vec4(c, l); return; }\n"
+               "  vec3 m1 = vec3(0.0), m2 = vec3(0.0);\n"
+               "  float dn = 1.0;\n"
+               "  ivec2 np = p;\n"
+               "  for (int y = -1; y <= 1; y++)\n"
+               "    for (int x = -1; x <= 1; x++) {\n"
+               "      ivec2 q = clamp(p + ivec2(x, y), ivec2(0), sz - 1);\n"
+               "      vec3 s = ycc(tm(max(texelFetch(t, q, 0).rgb, vec3(0.0))));\n"
+               "      m1 += s; m2 += s * s;\n"
+               "      float d = texelFetch(dep, min(ivec2(vec2(q) * dsc), dsz - 1), 0).r;\n"
+               "      if (d < dn) { dn = d; np = q; }\n"
+               "    }\n"
+               "  m1 /= 9.0;\n"
+               "  vec3 sg = sqrt(max(m2 / 9.0 - m1 * m1, vec3(0.0)));\n"
+               "  vec4 v = texelFetch(mv, min(ivec2(vec2(np) * vec2(textureSize(mv, 0)) / vec2(sz)), textureSize(mv, 0) - 1), 0);\n"
+               "  vec2 uv = (vec2(p) + 0.5) / vec2(sz), pu = uv - v.xy;\n"
+               "  if (any(lessThan(pu, vec2(0.0))) || any(greaterThan(pu, vec2(1.0)))) { o = vec4(c, l); return; }\n"
+               "  float lh = texelFetch(h, clamp(ivec2(pu * vec2(sz)), ivec2(0), sz - 1), 0).a, le = v.z * l;\n"
+               "  float keep = clamp(1.0 - (abs(lh - le) / max(le * 0.02, 2.0) - 1.0), 0.0, 1.0);\n"
+               "  vec3 hy = ycc(tm(cat(pu, vec2(sz))));\n"
+               "  vec3 lo = m1 - 1.25 * sg, hi = m1 + 1.25 * sg, ce = 0.5 * (hi + lo), ex = 0.5 * (hi - lo) + 1e-4;\n"
+               "  vec3 dv = (hy - ce) / ex;\n"
+               "  float mx = max(abs(dv.x), max(abs(dv.y), abs(dv.z)));\n"
+               "  if (mx > 1.0) hy = ce + (hy - ce) / mx;\n"
+               "  vec3 cy = ycc(tm(c));\n"
+               "  float w = pc.b.y * keep;\n"
+               "  o = vec4(itm(rgb(mix(cy, hy, w))), l);\n"
+               "}\n";
+    }
+    // FSR 3's mask of the interface (exec.c post_process): the pixels the interface drew over the composited scene
+    // (t0 the final image, t1 its copy before the first interface draw) - 1 there: FSR takes them as they are
+    if (!strcmp(name, "ui_mask.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t0;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D t1;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+               "  vec3 d = abs(texelFetch(t0, p, 0).rgb - texelFetch(t1, min(p, textureSize(t1, 0) - 1), 0).rgb);\n"
+               "  o = vec4(max(d.r, max(d.g, d.b)) > 2.0 / 255.0 ? 1.0 : 0.0);\n"
+               "}\n";
+    }
+    // The scene depth as R32F (FSR 3 reads a colour image: exec.c post_process)
+    if (!strcmp(name, "depth_r32.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() { o = vec4(texelFetch(dep, ivec2(gl_FragCoord.xy), 0).r); }\n";
+    }
+    // A post image back into a target (b.xy = 1 / the output's size; sampled, the sizes may differ): TAA's result into
+    // the game's scene
+    if (!strcmp(name, "copy.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() { o = vec4(texture(t, gl_FragCoord.xy * pc.b.xy).rgb, 1.0); }\n";
+    }
+    // Camera motion vectors (exec.c scene_hook_run): each pixel's position, rebuilt from its depth, taken to the
+    // previous frame by m = previous view-projection x inverse of this one (the game's matrices, GL style: NDC y up).
+    // a.x = 1: depth stored as (z_ndc + 1) / 2; a.y = the sign of NDC y at the bottom of the image (+1: row 0 is NDC
+    // y = -1). Out (RGBA16F): xy = velocity = this frame's uv - the previous frame's, in uv units; z = the pixel's
+    // distance in the previous frame / its distance now (q.w: the input point is this frame's clip / its w), for the
+    // temporal effects' disocclusion test.
+    if (!strcmp(name, "mv.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D obj;\n"  // (exec.c: per-object velocities, w = 1 written)
+               "layout(push_constant) uniform P { mat4 m; vec4 a; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  ivec2 sz = textureSize(dep, 0), p = ivec2(gl_FragCoord.xy);\n"
+               "  vec4 ov = texelFetch(obj, min(p, textureSize(obj, 0) - 1), 0);\n"
+               "  if (ov.w > 0.5) { o = vec4(ov.xyz, 1.0); return; }\n"
+               "  float d = texelFetch(dep, p, 0).r;\n"
+               "  vec2 uv = (vec2(p) + 0.5) / vec2(sz);\n"
+               "  vec2 n = uv * 2.0 - 1.0;\n"
+               "  n.y *= pc.a.y;\n"
+               "  vec4 q = pc.m * vec4(n, pc.a.x > 0.5 ? d * 2.0 - 1.0 : d, 1.0);\n"
+               "  vec2 pn = q.xy / q.w;\n"
+               "  pn.y *= pc.a.y;\n"
+               "  o = vec4(uv - (pn * 0.5 + 0.5), q.w, 1.0);\n"
+               "}\n";
+    }
+    // Motion vectors shown (b.xy = 1 / the output's size, b.z = the scale: velocity in uv x b.z around mid-grey) - the
+    // F12 debug view onto the scene, and LARECOMP_MV_DUMP's RGBA8 encoding (b.z = 32: +-1/64 of the image, 8 bits).
+    if (!strcmp(name, "mv_show.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  vec2 v = texture(t, gl_FragCoord.xy * pc.b.xy).rg * pc.b.z;\n"
+               "  o = vec4(clamp(0.5 + v, 0.0, 1.0), 0.5, 1.0);\n"
+               "}\n";
+    }
+    // The occlusion onto the scene: multiplied by the pipeline's blending (exec.c), or shown alone (the debug view and
+    // LARECOMP_SSAO_DUMP). b.xy = 1 / the output's size (the occlusion is at the depth's size: sampled, not fetched);
+    // b.z = a scale when shown alone (the scene is HDR: 1.0 is far past white after the game's tone mapping), 0: none.
+    if (!strcmp(name, "ssao_apply.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  float a = texture(t, gl_FragCoord.xy * pc.b.xy).r;\n"
+               "  o = vec4(vec3(a * (pc.b.z > 0.0 ? pc.b.z : 1.0)), 1.0);\n"
+               "}\n";
+    }
+    // Colour adjustment (F12 menu: runtime/ui/menu.mm), on the gamma-encoded image. a = (brightness, contrast,
+    // saturation): brightness scales, contrast pivots around mid-grey, saturation mixes with the Rec. 709 luma.
+    if (!strcmp(name, "color.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  vec3 c = texelFetch(t, ivec2(gl_FragCoord.xy), 0).rgb * pc.a.x;\n"
+               "  c = (c - 0.5) * pc.a.y + 0.5;\n"
+               "  c = mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, pc.a.z);\n"
+               "  o = vec4(clamp(c, 0.0, 1.0), 1.0);\n"
+               "}\n";
+    }
     if (!strcmp(name, "clear.vert")) {
         *stage = STAGE_VERTEX;
         return "#version 450\n"

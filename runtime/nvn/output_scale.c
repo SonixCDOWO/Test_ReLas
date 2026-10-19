@@ -5,6 +5,7 @@
 //   1x .. 4x       N times the Switch's docked image: 1080 lines x N (wide windows keep their shape: 32:9 at 2x =
 //                  7680 x 2160); capped to the GPU's 16384-pixel texture limit
 //   .75x / .50x / .25x  of Match display (scaled up to the window - with MetalFX on macOS when chosen)
+//   FSR 3.1        (the upscaler) Match display / the preset's ratio: 1.0 Native AA ... 3.0 Ultra Performance
 //   Dynamic        Match display, lowered in steps while the GPU can't hold 60 fps and raised again when it can
 //                  (each change reallocates the render targets: a short hitch, so it changes rarely, with hysteresis)
 // Test overrides: LARECOMP_SCALE=<f> (render height = 1080 x f), LARECOMP_WIDE_TEST=<f> (forced shape).
@@ -80,6 +81,8 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
     double h;
     int mode = g_settings.res_mode;
     if (forced > 0) h = forced;
+    // FSR 3.1: the window's resolution divided by its preset's ratio (the launcher's choice does not apply)
+    else if (g_settings.upscaler == UPSCALE_FSR3) h = (reshape ? dh / 1080.0 : fit) / settings_fsr3_ratio();
     else if (g_settings.res_height > 0) h = g_settings.res_height / 1080.0;  // (the launcher's choice)
     else if (mode >= 1 && mode <= 8) h = mode;
     else {

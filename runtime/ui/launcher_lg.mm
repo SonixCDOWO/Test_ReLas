@@ -23,6 +23,7 @@ extern "C" {
 #include "mods.h"
 #include "paths.h"
 #include "settings.h"
+#include "ui2x.h"
 void settings_save(void);
 void ui_window_init(void);
 SDL_Window *ui_window(void);
@@ -113,6 +114,48 @@ static void keys_section(void) {
     ImGui::SliderFloat(T("Mouse sensitivity", "Sensibilidade do mouse"), &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
     ImGui::SliderFloat(T("Controller stick dead zone", "Zona morta do analógico"), &g_settings.stick_deadzone, 0.0f, 0.40f, "%.2f");
     ImGui::PopItemWidth();
+}
+
+// ------------------------------------------------------------------ the interface at 2x (runtime/ui2x.c)
+// Made once from the player's own game files on request (the upscaler is downloaded then); used when made and on.
+static void ui2x_section(bool ready, bool *on) {
+    ImGui::SeparatorText(T("Sharper interface", "Interface mais nítida"));
+    int n = ui2x_running() ? 0 : ui2x_count();
+    int st = ui2x_state();
+    if (ui2x_running()) {
+        static const char *const en[] = {"", "Downloading the upscaler (waifu2x, 35 MB)...", "Reading the interface images...",
+                                         "Upscaling them (a few minutes)...", "Saving them..."};
+        static const char *const pt[] = {"", "Baixando o ampliador (waifu2x, 35 MB)...", "Lendo as imagens da interface...",
+                                         "Ampliando (alguns minutos)...", "Salvando..."};
+        ImGui::TextUnformatted(st >= UI2X_DOWNLOADING && st <= UI2X_PACKING ? (g_pt ? pt : en)[st] : "...");
+        ImGui::ProgressBar(ui2x_progress(), ImVec2(-FLT_MIN, 0));
+        return;
+    }
+    if (n) {
+        char label[160];
+        snprintf(label, sizeof label, T("Interface images at 2x (%d)", "Imagens da interface em 2x (%d)"), n);
+        ImGui::Checkbox(label, on);
+    } else {
+        ImGui::TextDisabled("%s", T("The game's menu and interface images, redrawn at twice their resolution.",
+                                    "As imagens dos menus e da interface do jogo, redesenhadas no dobro da resolução."));
+    }
+    ImGui::BeginDisabled(!ready);
+    if (ImGui::SmallButton(n ? T("Make them again", "Gerar de novo") : T("Make the 2x images", "Gerar as imagens em 2x"))) ui2x_generate_start();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", !ready ? T("Set up the game files first.", "Configure os arquivos do jogo antes.")
+                                       : T("From your own game files, with waifu2x (downloaded once from GitHub, 35 MB). Takes a few minutes and about 1 GB in cache/.",
+                                           "A partir dos seus arquivos do jogo, com o waifu2x (baixado uma vez do GitHub, 35 MB). Leva alguns minutos e ocupa cerca de 1 GB em cache/."));
+    if (st >= UI2X_FAIL_DOWNLOAD) {
+        static const char *const en[] = {"Couldn't download the upscaler: check the connection.",
+                                         "The upscaler didn't run on this GPU; details in lasrecomp.log.",
+                                         "Couldn't read the game files or write cache/."};
+        static const char *const pt[] = {"Não foi possível baixar o ampliador: confira a conexão.",
+                                         "O ampliador não rodou nesta GPU; detalhes no lasrecomp.log.",
+                                         "Não foi possível ler os arquivos do jogo ou gravar em cache/."};
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1), "%s", (g_pt ? pt : en)[st - UI2X_FAIL_DOWNLOAD]);
+    }
 }
 
 // ------------------------------------------------------------------ file dialogs (SDL calls back on any thread)
@@ -216,7 +259,8 @@ extern "C" void launcher_lg_run(const char *root) {
     static const int res_lines[] = {0, 720, 1080, 1440, 2160};
     int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
-    bool full = g_settings.fullscreen, smaa = g_settings.antialias == AA_SMAA, fps60 = g_settings.fps == 60,
+    bool ui2x_on = g_settings.ui2x;  // (the interface at 2x: runtime/ui2x.c)
+    bool full = g_settings.fullscreen, smaa = g_settings.antialias != AA_OFF, fps60 = g_settings.fps == 60,
          wildb = g_settings.wild_battle;
     // Translation: the folders under mods/ (runtime/mods.h); 0 = none (the game's own English)
     static char mods[MODS_MAX][128];
@@ -250,6 +294,12 @@ extern "C" void launcher_lg_run(const char *root) {
         }
         last_install = inst;
         bool ready = !setup_running() && setup_ready();
+        {   // (tests, LARECOMP_UI2X_GENERATE=1: the 2x interface images made, then exit - status 0 when done)
+            static int gen = -1;
+            if (gen < 0) gen = getenv("LARECOMP_UI2X_GENERATE") != NULL;
+            if (gen == 1 && ready) { ui2x_generate_start(); gen = 2; }
+            else if (gen == 2 && !ui2x_running()) exit(ui2x_state() == UI2X_DONE ? 0 : 1);
+        }
         if (autoplay && ready && inst != MOD_INSTALL_RUNNING) play = true;
         if (!vk_frame_begin(bg)) { SDL_Delay(16); continue; }
         if (keys_test && strchr(keys_test, ':') && frame == 5) {  // "<slot>:<key name>": the key pressed for the test
@@ -270,7 +320,7 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::PushItemWidth(420);
         ImGui::Combo(T("Resolution", "Resolução"), &res, g_pt ? res_pt : res_en, 5);
         if (ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full)) SDL_SetWindowFullscreen(win, full);
-        ImGui::Checkbox(T("Anti-aliasing (SMAA)", "Suavizar serrilhado (SMAA)"), &smaa);
+        ImGui::Checkbox(T("Anti-aliasing", "Suavizar serrilhado"), &smaa);
         // (both hook game functions by address: builds without address tables keep them off, runtime/fnhook.c)
         bool known = !setup_ready() || game_build("extracted/exefs") != GAME_BUILD_OTHER;
         const char *only = T("Only with version 1.0.0 (the base game) of Eevee or Pikachu for now.",
@@ -303,6 +353,7 @@ extern "C" void launcher_lg_run(const char *root) {
                                                                                 : T("No translation for this game in that file.", "Esse arquivo não tem tradução para este jogo."));
             }
         }
+        ui2x_section(ready, &ui2x_on);
         if (keys_test) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
         if (ImGui::CollapsingHeader(T("Keyboard and mouse", "Teclado e mouse"))) keys_section();
         ImGui::Spacing();
@@ -322,9 +373,11 @@ extern "C" void launcher_lg_run(const char *root) {
     }
     g_settings.res_height = res_lines[res];
     g_settings.fullscreen = full;
-    g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
+    // (the box is anti-aliasing on / off: TAA, chosen in the F12 menu, stays TAA)
+    g_settings.antialias = !smaa ? AA_OFF : g_settings.antialias == AA_TAA ? AA_TAA : AA_SMAA;
     g_settings.fps = fps60 ? 60 : 30;
     g_settings.wild_battle = wildb;
+    g_settings.ui2x = ui2x_on;
     snprintf(g_settings.mod, sizeof g_settings.mod, "%s", mod ? mods[mod - 1] : "");
     settings_save();
     vk_imgui_backend_shutdown();

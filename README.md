@@ -345,6 +345,11 @@ Most internal documentation is in Portuguese.
   - [shaderc](https://github.com/google/shaderc) (Apache 2.0): GLSL to SPIR-V;
   - [SMAA](https://github.com/iryoku/smaa) (MIT, `third_party/smaa/LICENSE.txt`);
   - [AMD FidelityFX FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT): upscaling;
+  - [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) (MIT, `third_party/fidelityfx/LICENSE.txt`):
+    FSR 3.1;
+  - [bcdec](https://github.com/iOrange/bcdec) and [stb](https://github.com/nothings/stb) (MIT / public domain): the 2x
+    interface's texture decoding and compression; [waifu2x-ncnn-vulkan](https://github.com/nihui/waifu2x-ncnn-vulkan)
+    (MIT), downloaded when the player asks for it, upscales them;
   - the [Baloo 2](https://github.com/EkType/Baloo2) font (SIL OFL 1.1, `third_party/fonts/Baloo2/OFL.txt`);
   - [Capstone](https://www.capstone-engine.org), [Unicorn](https://www.unicorn-engine.org) and
     [python-lz4](https://github.com/python-lz4/python-lz4) in the recompiler; [PyInstaller](https://pyinstaller.org)

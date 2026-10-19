@@ -1,7 +1,9 @@
 // In-game overlay (Dear ImGui on the Vulkan renderer; input fed from SDL events): the "close the game?" question
-// (Esc, F1 or Minus + Plus on a controller), the name entry the game asks for (runtime/hle/swkbd.c), the FPS counter
+// (Esc, F1 or Minus + Plus on a controller), the F12 settings (volume, brightness, contrast, saturation), the name entry the game asks for (runtime/hle/swkbd.c), the FPS counter
 // and the controller's finger on the touch screen (runtime/hle/input.c). Everything else is set on the start screen
 // (runtime/ui/launcher_lg.mm).
+// LARECOMP_MENU_KEY=<SDL scancode name> ("F10", "Insert"...): another key for the F12 settings (Steam takes F12 for
+// screenshots by default).
 //
 // Threads: SDL events arrive on the main thread and are queued; the overlay is laid out and drawn on the render
 // thread inside backend_present, after the game image, into the same window image.
@@ -41,6 +43,8 @@ static void pick_menu_language(void) {
 
 // ------------------------------------------------------------------ state shared with the main thread
 static std::atomic<bool> g_open{false};  // the "close the game?" question is up
+static std::atomic<bool> g_cfg{false};   // the F12 settings are up
+static int g_cfg_page;                   // 0 the settings, 1 the advanced ones (render thread)
 static std::atomic<bool> g_want_fullscreen_apply{false};
 
 struct QEvent {
@@ -66,6 +70,14 @@ static void set_open(bool open) {
     if (open == g_open.load()) return;
     g_open.store(open);
     input_reset();  // nothing held while the question had focus leaks into the game
+    if (!open) settings_save();
+}
+static void set_cfg(bool open) {
+    if (open == g_cfg.load()) return;
+    if (open) set_open(false);
+    g_cfg.store(open);
+    if (!open) g_cfg_page = 0;
+    input_reset();
     if (!open) settings_save();
 }
 extern "C" void menu_test_open(void) { set_open(true); }  // (LARECOMP_MENU_AT: runtime/nvn/vulkan/device.c)
@@ -124,9 +136,19 @@ static std::atomic<int> g_kbd{0};  // 1 open, 2 confirmed, 3 cancelled
 static std::atomic<bool> g_last_pad{false};
 static char g_kbd_text[96];
 static int g_kbd_max = 8;
-static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
-// The game gets no input while this is true (runtime/hle/input.c): the question or the name entry is up.
+static bool capturing() { return g_open.load() || g_cfg.load() || g_kbd.load() == 1; }
+// The game gets no input while this is true (runtime/hle/input.c): the question, the settings or the name entry is up.
 extern "C" bool menu_input_captured(void) { return capturing(); }
+
+static SDL_Scancode cfg_key(void) {
+    static SDL_Scancode k = SDL_SCANCODE_UNKNOWN;
+    if (k == SDL_SCANCODE_UNKNOWN) {
+        const char *e = getenv("LARECOMP_MENU_KEY");
+        k = e && *e ? SDL_GetScancodeFromName(e) : SDL_SCANCODE_UNKNOWN;
+        if (k == SDL_SCANCODE_UNKNOWN) k = SDL_SCANCODE_F12;
+    }
+    return k;
+}
 
 bool menu_handle_event(const SDL_Event *e) {
     static bool back_down, start_down;
@@ -143,9 +165,13 @@ bool menu_handle_event(const SDL_Event *e) {
     }
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN:
+        if (!e->key.repeat && !typing && (e->key.scancode == cfg_key() || (e->key.scancode == SDL_SCANCODE_ESCAPE && g_cfg.load()))) {
+            set_cfg(e->key.scancode == SDL_SCANCODE_ESCAPE ? false : !g_cfg.load());  // (Esc closes the settings)
+            return true;
+        }
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F1 ||
                                (e->key.scancode == SDL_SCANCODE_ESCAPE && !g_open.load()))) {
-            if (!typing) set_open(!g_open.load());  // (Esc with the question up goes to it below: "Não")
+            if (!typing) { set_cfg(false); set_open(!g_open.load()); }  // (Esc with the question up goes to it below: "Não")
             return true;
         }
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F11 ||
@@ -178,6 +204,7 @@ bool menu_handle_event(const SDL_Event *e) {
         if (e->gbutton.button == SDL_GAMEPAD_BUTTON_BACK) back_down = down;
         if (e->gbutton.button == SDL_GAMEPAD_BUTTON_START) start_down = down;
         if (down && !typing && ((back_down && start_down) || e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE)) {
+            set_cfg(false);
             set_open(!g_open.load());
             return true;
         }
@@ -323,6 +350,7 @@ static void drain_events(ImGuiIO &io) {
 // Reboot (runtime/main.c): the game is gone - the question and the name entry close; the ImGui context stays.
 RT_ON_RESET(menu_reset) {
     set_open(false);
+    set_cfg(false);
     g_kbd = 0;
     osk_cancel();
     pthread_mutex_lock(&q_lock);
@@ -408,7 +436,10 @@ static void quit_draw(ImGuiIO &io, float scale) {
     }
     ImGui::SameLine();
     bool no = ImGui::Button(M("No", "Não", "Нет"), ImVec2(bw, 0));
-    if (no || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    if (ImGui::Button(M("Settings (F12)", "Configurações (F12)", "Настройки (F12)"), ImVec2(bw * 2 + ImGui::GetStyle().ItemSpacing.x, 0))) {
+        focus_no = false;
+        set_cfg(true);  // (closes the question: the way in from a controller)
+    } else if (no || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         set_open(false);
         focus_no = false;
     }
@@ -416,11 +447,198 @@ static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::End();
 }
 
+// F12: volume and the game image's colour, applied live (runtime/services/audio.c apply_gain, runtime/nvn/vulkan/exec.c
+// post_process); saved to larecomp.ini on closing. B / Esc / F12 close.
+// A label and the slider beside it, the sliders lined up at x (the widest label of the page)
+static bool cfg_row(const char *label, float x) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(x);
+    ImGui::SetNextItemWidth(-1);
+    return true;
+}
+static float cfg_label_x(const char *const *labels, int n) {
+    float w = 0;
+    for (int i = 0; i < n; i++) w = fmaxf(w, ImGui::CalcTextSize(labels[i]).x);
+    return w + ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2;
+}
+
+// Advanced settings (the "Advanced..." button): SSAO and GI parameters, the debug views
+static void cfg_advanced(float scale, bool *close) {
+    const char *l_int = M("Intensity", "Intensidade", "Сила"), *l_rad = M("Radius", "Raio", "Радиус"),
+               *l_thick = M("Thickness", "Espessura", "Толщина"), *l_rays = M("Rays", "Raios", "Лучи"),
+               *l_steps = M("Steps", "Passos", "Шаги"), *l_res = M("Resolution", "Resolução", "Разрешение");
+    const char *l_bri = M("Brightness", "Brilho", "Яркость"), *l_con = M("Contrast", "Contraste", "Контраст"),
+               *l_sat = M("Saturation", "Saturação", "Насыщенность");
+    const char *labels[] = {l_int, l_rad, l_thick, l_rays, l_steps, l_res, l_bri, l_con, l_sat};
+    float x = cfg_label_x(labels, 9);
+    // the image's colour (runtime/nvn/vulkan/exec.c post_process, color.frag)
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Image", "Imagem", "Изображение"));
+    {
+        struct Row { const char *label; float *v, lo, hi; } rows[] = {
+            {l_bri, &g_settings.brightness, 0.5f, 1.5f}, {l_con, &g_settings.contrast, 0.5f, 1.5f}, {l_sat, &g_settings.saturation, 0.0f, 2.0f}};
+        for (int i = 0; i < 3; i++) {
+            float pct = *rows[i].v * 100;
+            cfg_row(rows[i].label, x);
+            ImGui::PushID(100 + i);
+            if (ImGui::SliderFloat("##c", &pct, rows[i].lo * 100, rows[i].hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *rows[i].v = pct / 100;
+            ImGui::PopID();
+            if (!i) ImGui::SetItemDefaultFocus();
+        }
+    }
+    ImGui::Separator();
+    // SSAO (runtime/nvn/vulkan/exec.c ssao_run)
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)"));
+    ImGui::BeginDisabled(!g_settings.ssao);
+    {
+        float pct = g_settings.ssao_intensity * 100;
+        cfg_row(l_int, x);
+        if (ImGui::SliderFloat("##ssao_i", &pct, 0, 300, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.ssao_intensity = pct / 100;
+        cfg_row(l_rad, x);
+        ImGui::SliderFloat("##ssao_r", &g_settings.ssao_radius, 10, 400, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::Checkbox(M("Accumulate over frames##ssao", "Acumular entre quadros##ssao", "Накопление по кадрам##ssao"), &g_settings.ssao_temporal);
+        ImGui::SameLine();
+        ImGui::Checkbox(M("Show the occlusion alone", "Mostrar só a oclusão", "Только затенение"), &g_settings.ssao_debug);
+    }
+    ImGui::EndDisabled();
+    // GI (runtime/nvn/vulkan/exec.c gi_run): one bounce of the visible light, traced in screen space
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)"));
+    ImGui::BeginDisabled(!g_settings.gi);
+    {
+        float pct = g_settings.gi_intensity * 100;
+        cfg_row(l_int, x);
+        if (ImGui::SliderFloat("##gi_i", &pct, 0, 400, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.gi_intensity = pct / 100;
+        cfg_row(l_rad, x);
+        ImGui::SliderFloat("##gi_r", &g_settings.gi_radius, 50, 1000, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        cfg_row(l_thick, x);
+        ImGui::SliderFloat("##gi_t", &g_settings.gi_thickness, 5, 100, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        cfg_row(l_rays, x);
+        ImGui::SliderInt("##gi_rays", &g_settings.gi_rays, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+        cfg_row(l_steps, x);
+        ImGui::SliderInt("##gi_steps", &g_settings.gi_steps, 4, 32, "%d", ImGuiSliderFlags_AlwaysClamp);
+        const char *res[] = {M("Half", "Metade", "1/2"), M("Third", "Um terço", "1/3"), M("Quarter", "Um quarto", "1/4")};
+        int r = g_settings.gi_div - 2;
+        cfg_row(l_res, x);
+        if (ImGui::Combo("##gi_res", &r, res, 3)) g_settings.gi_div = r + 2;
+        ImGui::Checkbox(M("Accumulate over frames##gi", "Acumular entre quadros##gi", "Накопление по кадрам##gi"), &g_settings.gi_temporal);
+        ImGui::SameLine();
+        ImGui::Checkbox(M("Show the indirect light alone", "Mostrar só a luz indireta", "Только непрямой свет"), &g_settings.gi_debug);
+    }
+    ImGui::EndDisabled();
+    // TAA and the motion vectors (runtime/nvn/vulkan/exec.c taa_run, mv_run; per object: maxwell/translate.c velocity)
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Temporal (TAA / FSR 3.1)", "Temporal (TAA / FSR 3.1)", "Временное (TAA / FSR 3.1)"));
+    ImGui::BeginDisabled(g_settings.antialias != AA_TAA && g_settings.upscaler != UPSCALE_FSR3);  // (FSR 3.1's sharpening too)
+    {
+        float pct = g_settings.taa_sharpness * 100;
+        cfg_row(M("Sharpness", "Nitidez", "Резкость"), x);
+        if (ImGui::SliderFloat("##taa_s", &pct, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.taa_sharpness = pct / 100;
+    }
+    ImGui::EndDisabled();
+    ImGui::Checkbox(M("Per-object motion vectors", "Vetores de movimento por objeto", "Векторы движения объектов"), &g_settings.mv_objects);
+    ImGui::SameLine();
+    ImGui::Checkbox(M("Show motion vectors (debug)", "Mostrar vetores de movimento (depuração)", "Векторы движения (отладка)"),
+                    &g_settings.mv_debug);
+    settings_clamp_color();
+    ImGui::Spacing();
+    float bw = 240 * scale;
+    if (ImGui::Button(M("Back", "Voltar", "Назад"), ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+        g_cfg_page = 0;
+    ImGui::SameLine();
+    if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0))) {  // (on / off stay)
+        g_settings.ssao_intensity = 2.0f, g_settings.ssao_radius = 100.0f, g_settings.ssao_temporal = true;
+        g_settings.gi_intensity = 2.0f, g_settings.gi_radius = 300.0f, g_settings.gi_thickness = 25.0f;
+        g_settings.gi_rays = 4, g_settings.gi_steps = 8, g_settings.gi_div = 2, g_settings.gi_temporal = true;
+        g_settings.ssao_debug = g_settings.gi_debug = g_settings.mv_debug = false;
+        g_settings.taa_sharpness = 0.5f, g_settings.mv_objects = true;
+        g_settings.brightness = g_settings.contrast = g_settings.saturation = 1.0f;
+    }
+    ImGui::SameLine();
+    *close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0));
+}
+
+static void cfg_draw(ImGuiIO &io, float scale) {
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 70));
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    float ww = fminf(io.DisplaySize.x * 0.9f, 900 * scale);
+    ImGui::SetNextWindowSize(ImVec2(ww, 0), ImGuiCond_Always);
+    // (taller than the screen - the advanced page at 720p: it scrolls, and keyboard / pad navigation follows the focus)
+    ImGui::SetNextWindowSizeConstraints(ImVec2(ww, 0), ImVec2(ww, io.DisplaySize.y * 0.92f));
+    // (one window per page: a page appearing gets its default focus)
+    ImGui::Begin(g_cfg_page ? "##cfg_adv" : "##cfg", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                                                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    // (fixed width, height fitted: the sliders fill the line, which an auto-resized window cannot have)
+    ImGui::PushFont(g_mlang == 2 ? g_font : g_menu_font);
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", g_cfg_page ? M("Advanced settings", "Configurações avançadas", "Дополнительно")
+                                                                       : M("Settings", "Configurações", "Настройки"));
+    ImGui::PopFont();
+    bool close = false;
+    if (g_cfg_page) {
+        cfg_advanced(scale, &close);
+    } else {
+        const char *labels[] = {M("Volume", "Volume", "Громкость"), M("Shadow filter", "Filtro das sombras", "Фильтр теней"),
+                                M("Anti-aliasing", "Antisserrilhado", "Сглаживание"), M("Upscaler", "Escalonador", "Масштабирование"),
+                                M("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1")};
+        float x = cfg_label_x(labels, 5);
+        {
+            float pct = g_settings.volume * 100;
+            cfg_row(labels[0], x);
+            if (ImGui::SliderFloat("##vol", &pct, 0, 200, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.volume = pct / 100;
+            ImGui::SetItemDefaultFocus();  // (d-pad / arrows pick a row; A / Enter, then left-right, changes it)
+        }
+        ImGui::Separator();
+        // the effects on / off here, their parameters on the advanced page
+        ImGui::Checkbox(M("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)"), &g_settings.ssao);
+        ImGui::SameLine();
+        ImGui::Checkbox(M("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)"), &g_settings.gi);
+        // the shadow map's filter (runtime/nvn/vulkan/textures.c vk_sampler, runtime/nvn/maxwell/translate.c shpcf)
+        const char *names[] = {M("Game's", "Do jogo", "Как в игре"), M("Bilinear", "Bilinear", "Билинейный"),
+                               M("Smooth", "Suave", "Мягкий")};
+        cfg_row(labels[1], x);
+        ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, names, 3);
+        // anti-aliasing: SMAA on the final image (the interface too), or TAA on the scene (jittered, motion vectors:
+        // runtime/nvn/vulkan/exec.c taa_run)
+        const char *aa[] = {M("Off", "Desligado", "Выкл."), "SMAA", "TAA"};
+        cfg_row(labels[2], x);
+        ImGui::BeginDisabled(g_settings.upscaler == UPSCALE_FSR3);  // (FSR 3.1 anti-aliases on its own)
+        ImGui::Combo("##aa", &g_settings.antialias, aa, 3);
+        ImGui::EndDisabled();
+        // the upscaler (a render resolution below the window's: the start screen): bilinear, FSR 1, or FSR 3.1 (temporal:
+        // jittered scene, motion vectors, the interface masked; it anti-aliases, TAA steps aside - exec.c, fsr3.cpp)
+        const char *up[] = {M("Bilinear", "Bilinear", "Билинейный"), "FSR 1", "FSR 3.1"};
+        int u = g_settings.upscaler == UPSCALE_FSR3 ? 2 : g_settings.upscaler == UPSCALE_FSR1 ? 1 : 0;
+        cfg_row(labels[3], x);
+        if (ImGui::Combo("##up", &u, up, 3)) g_settings.upscaler = u == 2 ? UPSCALE_FSR3 : u == 1 ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
+        // FSR 3.1's presets: the render resolution is the window's divided by the ratio (runtime/nvn/output_scale.c)
+        if (g_settings.upscaler == UPSCALE_FSR3) {
+            const char *pr[] = {M("Native AA (1.0x)", "AA nativo (1,0x)", "Нативное AA (1,0x)"),
+                                M("Quality (1.5x)", "Qualidade (1,5x)", "Качество (1,5x)"),
+                                M("Balanced (1.7x)", "Equilibrado (1,7x)", "Баланс (1,7x)"),
+                                M("Performance (2.0x)", "Desempenho (2,0x)", "Производительность (2,0x)"),
+                                M("Ultra Performance (3.0x)", "Ultra desempenho (3,0x)", "Макс. производительность (3,0x)")};
+            cfg_row(labels[4], x);
+            ImGui::Combo("##fsr3p", &g_settings.fsr3_preset, pr, 5);
+        }
+        settings_clamp_color();
+        ImGui::Spacing();
+        float bw = 240 * scale;
+        if (ImGui::Button(M("Advanced...", "Avançado...", "Дополнительно..."), ImVec2(bw, 0))) g_cfg_page = 1;
+        ImGui::SameLine();
+        if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0))) g_settings.volume = 1.0f;
+        ImGui::SameLine();
+        close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+    }
+    ImGui::TextDisabled("%s", M("F12 or Esc closes", "F12 ou Esc fecha", "F12 или Esc — закрыть"));
+    ImGui::End();
+    if (close) set_cfg(false);
+}
+
 void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
-    bool open = g_open.load(), kbd = g_kbd.load() == 1;
+    bool open = g_open.load(), cfg = g_cfg.load(), kbd = g_kbd.load() == 1;
     float fx, fy;
-    bool fdown, finger = !open && input_finger_cursor(&fx, &fy, &fdown);
-    if (!open && !kbd && !g_settings.show_fps && !finger) {
+    bool fdown, finger = !open && !cfg && input_finger_cursor(&fx, &fy, &fdown);
+    if (!open && !cfg && !kbd && !g_settings.show_fps && !finger) {
         if (g_inited) { pthread_mutex_lock(&q_lock); q_events.clear(); pthread_mutex_unlock(&q_lock); }
         return;
     }
@@ -464,6 +682,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         dl->AddCircle(ImVec2(fx, fy), r, IM_COL32(255, 255, 255, 235), 0, 4 * scale);
     }
     if (open) quit_draw(io, scale);
+    else if (cfg && !kbd) cfg_draw(io, scale);
     if (kbd) keyboard_draw(io, scale);
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);  // inside the window image's rendering
