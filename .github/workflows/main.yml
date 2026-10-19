@@ -64,6 +64,17 @@ jobs:
                'needs a CPU with SSE4.2 and POPCNT (Intel Nehalem / 2008 or newer).'),
           ])
           edit('runtime/platform/linux.c', [(cpu_old, cpu_new)])
+
+          # La runtime C de Zig (mingw libc/libm, compiler-rt) se compila al enlazar la sonda de zig_slim.sh SIN -mcpu,
+          # asi que usa la CPU nativa del runner de GitHub (AVX2/AVX-512): fmaf() y otras salian con instrucciones VEX
+          # y daban c000001d en CPUs sin AVX. Se pasa -mcpu=x86_64_v2 tambien a ese enlace.
+          edit('tools/zig_slim.sh', [
+              ("flags=()  # (the game code's flags", "cpu=()\nflags=()  # (the game code's flags"),
+              ('flags+=("-mcpu=${c//-/_}") ;;', 'flags+=("-mcpu=${c//-/_}"); cpu+=("-mcpu=${c//-/_}") ;;'),
+              ('$ZA cc -shared -o probe.dll dll.o host.a -v 2> link.log', '$ZA cc "${cpu[@]}" -shared -o probe.dll dll.o host.a -v 2> link.log'),
+          ])
+          zs = read('tools/zig_slim.sh')
+          assert zs.count('"${cpu[@]}"') == 1 and 'cpu+=(' in zs, 'zig_slim.sh sin cambiar'
           print('Cambios SSE4.2 aplicados')
           PY
           grep -n "GENARCH  ?=" Makefile
@@ -128,6 +139,22 @@ jobs:
       - name: make dist
         shell: msys2 {0}
         run: make dist
+
+      # Aviso temprano: la runtime C de Zig que se enlaza al juego no debe contener instrucciones AVX (VEX/YMM).
+      - name: Comprobar que la runtime de Zig no usa AVX
+        shell: msys2 {0}
+        run: |
+          n=0
+          for f in build/zig-slim/rt/*.lib build/zig-slim/rt/*.obj; do
+            [ -f "$f" ] || continue
+            c=$(objdump -d -M intel "$f" 2>/dev/null | grep -E -c '[[:space:]]v(zeroupper|movdq[au]|movups|movaps|pxor|cvtss2sd|cvtsd2ss|mulsd|addsd)|ymm' || true)
+            echo "$f: instrucciones AVX = $c"
+            n=$((n + c))
+          done
+          echo "Total instrucciones AVX en la runtime de Zig: $n"
+          if [ "$n" -gt 0 ]; then
+            echo "::warning::La runtime de Zig todavia contiene instrucciones AVX ($n). Puede fallar en CPUs sin AVX."
+          fi
 
       - name: Localizar el zip
         id: zip
