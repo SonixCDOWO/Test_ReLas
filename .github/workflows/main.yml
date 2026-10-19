@@ -1,11 +1,13 @@
-# Archivo único para tu fork. Crealo en GitHub con el nombre: .github/workflows/build-windows.yml
-# No hace falta git ni editar nada más: este workflow aplica solo los cambios SSE4.2 (x86-64-v2) antes de compilar
-# y construye LetsGoRecomp-<version>-windows.zip siguiendo "make dist" del proyecto.
 # No incluye ningún archivo del juego: el juego se prepara en tu PC desde tu propia copia.
 name: build-windows
 
 on:
   workflow_dispatch:        # botón "Run workflow" en la pestaña Actions
+    inputs:
+      ref:
+        description: 'Etiqueta del repo de raulzrrs/letsgo-recomp a compilar'
+        default: 'v0.4.2'
+        required: true
 
 permissions:
   contents: read
@@ -23,7 +25,11 @@ jobs:
           git config --global core.autocrlf false
           git config --global core.eol lf
 
+      # Descarga el código del autor en la versión pedida (no depende del estado de tu fork).
       - uses: actions/checkout@v4
+        with:
+          repository: raulzrrs/letsgo-recomp
+          ref: ${{ inputs.ref || 'v0.4.2' }}
 
       - uses: actions/setup-python@v5
         with:
@@ -75,6 +81,68 @@ jobs:
           ])
           zs = read('tools/zig_slim.sh')
           assert zs.count('"${cpu[@]}"') == 1 and 'cpu+=(' in zs, 'zig_slim.sh sin cambiar'
+          # Importacion del heap del juego como buffer de GPU (texto invisible en iGPU con poca RAM)
+          EXEC_PAIRS = [
+           # 1) la importacion "completa" pasa a ser un intento con tamano dado, y registra por que falla
+           ("static bool gmem_import(uint64_t size) {\n",
+            "static bool gmem_import_one(uint64_t size) {\n"),
+           ("    if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) return false;\n",
+            "    VkResult gm_r = vkAllocateMemory(g_vk.dev, &ai, NULL, &mem);\n"
+            "    if (gm_r != VK_SUCCESS) {\n"
+            "        LOG(\"[vk] gmem import %llu MB: vkAllocateMemory failed (VkResult %d)\\n\", (unsigned long long)(size >> 20), (int)gm_r);\n"
+            "        return false;\n"
+            "    }\n"),
+           ("    if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }\n",
+            "    gm_r = vkCreateBuffer(g_vk.dev, &bi, NULL, &buf);\n"
+            "    if (gm_r != VK_SUCCESS) {\n"
+            "        LOG(\"[vk] gmem import %llu MB: vkCreateBuffer failed (VkResult %d)\\n\", (unsigned long long)(size >> 20), (int)gm_r);\n"
+            "        vkFreeMemory(g_vk.dev, mem, NULL);\n"
+            "        return false;\n"
+            "    }\n"),
+           # 2) envoltorio: si el heap completo no se puede importar (iGPU con 4 GB de RAM), prueba prefijos mas pequenos
+           ("static uint64_t gmem_tried;  // heap size the import was last attempted for (gmem_info imports / re-imports)\n",
+            "// Fork SSE4.2: on an iGPU with little RAM (shared GPU memory is about half of it) the whole guest heap cannot be imported, and every\n"
+            "// shader global-memory read then returns zero (UI text in Let's Go). Try smaller prefixes of the heap: reads past the imported range\n"
+            "// are harmless (robustBufferAccess, descriptor range = imported size), reads inside it work. LARECOMP_VK_GMEM_MB=<n> forces a size.\n"
+            "static bool gmem_import(uint64_t size) {\n"
+            "    const uint64_t mb = 1ull << 20;\n"
+            "    uint64_t lim = g_vk.props.limits.maxStorageBufferRange;\n"
+            "    uint64_t forced = getenv(\"LARECOMP_VK_GMEM_MB\") ? (uint64_t)strtoull(getenv(\"LARECOMP_VK_GMEM_MB\"), NULL, 10) * mb : 0;\n"
+            "    uint64_t cand[] = {size, 2048 * mb, 1536 * mb, 1024 * mb, 768 * mb, 512 * mb, 256 * mb};\n"
+            "    LOG(\"[vk] gmem import: heap %llu MB, maxStorageBufferRange %llu MB%s\\n\", (unsigned long long)(size >> 20), (unsigned long long)(lim >> 20),\n"
+            "        forced ? \" (LARECOMP_VK_GMEM_MB forced)\" : \"\");\n"
+            "    if (forced) { cand[0] = forced; return forced <= size && forced > gmem_size && gmem_import_one(forced); }\n"
+            "    uint64_t last = 0;\n"
+            "    for (size_t i = 0; i < sizeof cand / sizeof cand[0]; i++) {\n"
+            "        uint64_t s = cand[i];\n"
+            "        if (s > size || s == last || (lim && s > lim)) continue;\n"
+            "        if (s <= gmem_size) break;  // (a bigger import is already in place)\n"
+            "        last = s;\n"
+            "        if (gmem_import_one(s)) return true;\n"
+            "    }\n"
+            "    return false;\n"
+            "}\n"
+            "\n"
+            "static uint64_t gmem_tried;  // heap size the import was last attempted for (gmem_info imports / re-imports)\n"
+            "static uint64_t gmem_want_tried;  // heap size gmem_info last tried to import (a partial import must not retry on every call)\n"),
+           # 3) gmem_info: un import parcial no debe reintentarse en cada llamada
+           ("    if (!off && want > gmem_size && !gmem_import(want)) {\n"
+            "        LOG(\"[vk] guest heap import failed (%llu MB): shader global memory reads return zero\\n\", (unsigned long long)(want >> 20));\n"
+            "        off = 1;\n"
+            "    }\n",
+            "    if (!off && want > gmem_size && want != gmem_want_tried) {\n"
+            "        gmem_want_tried = want;\n"
+            "        if (!gmem_import(want)) {\n"
+            "            LOG(\"[vk] guest heap import failed (%llu MB): shader global memory reads return zero\\n\", (unsigned long long)(want >> 20));\n"
+            "            off = 1;\n"
+            "        } else if (gmem_size < want) {\n"
+            "            LOG(\"[vk] guest heap imported only in part (%llu of %llu MB): global memory beyond reads zero\\n\", (unsigned long long)(gmem_size >> 20), (unsigned long long)(want >> 20));\n"
+            "        }\n"
+            "    }\n"),
+           ("    gmem_size = gmem_tried = 0;\n",
+            "    gmem_size = gmem_tried = gmem_want_tried = 0;\n"),
+          ]
+          edit('runtime/nvn/vulkan/exec.c', EXEC_PAIRS)
           print('Cambios SSE4.2 aplicados')
           PY
           grep -n "GENARCH  ?=" Makefile
