@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fixes SSAO, GI, TAA and FSR 3.1 flickering in cutscenes and menus at 60 fps**: there the game runs at 30 and an
+  in-between image is drawn by replaying the frame; that image shared the frame's number, so the scene effects (which
+  run once per frame) skipped it and every other image on screen went out without occlusion, indirect light or
+  anti-aliasing. The in-between image is now a frame of its own for them, in the order the images are rendered: its own
+  jitter and history, its camera blended between the two frames as its draws are (motion vectors), and frame N's
+  post-processing (FSR 3.1, SMAA, the colour pass) done before the replay overwrites its inputs and shown after it.
+  Professor Oak's cutscene in Pallet Town, FSR 3.1 Native AA + SSAO + GI: the brightness jump between consecutive
+  images 0.100 -> 0.007, the in-between and final images now as alike as with the effects off (0.2 vs 0.13).
 - **Sharper text at high resolutions** (always on, nothing to set): the game rasterizes its text with the system font into
   a 2048x1024 glyph cache at sizes 22-36, which went blurry when stretched to 1440p or 4K. Every glyph the game caches is
   now rasterized again by the same engine (nn::fontll) at N x its size into an N x copy of the cache, which the renderer
