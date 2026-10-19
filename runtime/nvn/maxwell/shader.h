@@ -68,10 +68,14 @@ typedef struct {
     bool uses_tint;         // fragment: reads the per-draw tint (buffer 19, float4[2]) applied to color target 0
     bool uses_rscale;       // reads the resolution-scale table (fragment/compute buffer 18): float4 [0] = render
                             // target scale, [1 + i] = allocation scale of texture i
+    bool uses_shpcf;        // fragment: shadow-map lookups take the shadow filter (specialization constant SHADOW_Q_SPEC_ID)
     uint32_t local_mem;     // bytes of local memory
     uint32_t num_insts;
     char error[256];        // set when translation fails
 } ShaderInfo;
+
+// The shadow filter's specialization constant (int: 0 / 1 the game's lookup, 2 a 3x3 tent per lookup)
+#define SHADOW_Q_SPEC_ID 7
 
 // Global memory (LDG/STG) is addressed through one buffer that wraps the guest heap.
 #define GMEM_BUFFER_INDEX 17

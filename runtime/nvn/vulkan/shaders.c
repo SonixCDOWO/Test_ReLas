@@ -419,6 +419,106 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1.0);\n"
                "}\n";
     }
+    // SSAO (F12 menu; exec.c ssao_run): on the game's depth, between its opaque and its blended draws. a = the game's
+    // projection (P00, P11, A, B: GL style, z_ndc = (A z + B) / -z, so the distance along the view axis is
+    // B / (z_ndc + A)); b.z = 1 when depth was stored as (z_ndc + 1) / 2 (NVN's -1..1 mode). Positions are rebuilt
+    // in view space (x right, y as the image, z the distance: one handedness throughout), the normal from the nearer
+    // neighbours (no smearing across silhouettes).
+    if (!strcmp(name, "ssao.frag") || !strcmp(name, "ssao_blur.frag")) {
+        *stage = STAGE_FRAGMENT;
+        static const char *common =
+            "#version 450\n"
+            "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+            "layout(location = 0) out vec4 o;\n"
+            "float lin(float d) { return pc.a.w / ((pc.b.z > 0.5 ? d * 2.0 - 1.0 : d) + pc.a.z); }\n";
+        // b.x = radius (world units), b.y = intensity, b.w = the largest screen radius in pixels. 16 samples on a
+        // spiral turned per pixel (interleaved gradient noise; the blur evens it out), denser near the centre.
+        static const char *ao =
+            "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+            "ivec2 sz;\n"
+            "vec3 vpos(ivec2 p) {\n"
+            "  p = clamp(p, ivec2(0), sz - 1);\n"
+            "  float l = lin(texelFetch(dep, p, 0).r);\n"
+            "  vec2 ndc = (vec2(p) + 0.5) / vec2(sz) * 2.0 - 1.0;\n"
+            "  return vec3(ndc.x * l / pc.a.x, ndc.y * l / pc.a.y, l);\n"
+            "}\n"
+            "void main() {\n"
+            "  sz = textureSize(dep, 0);\n"
+            "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+            "  if (texelFetch(dep, p, 0).r >= 0.999999) { o = vec4(1.0); return; }\n"
+            "  vec3 c = vpos(p), l = vpos(p - ivec2(1, 0)), r = vpos(p + ivec2(1, 0)), u = vpos(p - ivec2(0, 1)), d = vpos(p + ivec2(0, 1));\n"
+            "  vec3 dx = abs(r.z - c.z) < abs(c.z - l.z) ? r - c : c - l;\n"
+            "  vec3 dy = abs(d.z - c.z) < abs(c.z - u.z) ? d - c : c - u;\n"
+            "  vec3 n = normalize(cross(dx, dy));\n"
+            "  if (dot(n, c) > 0.0) n = -n;\n"
+            "  float rad = pc.b.x;\n"
+            "  float rpx = min(rad * pc.a.x / c.z * 0.5 * float(sz.x), pc.b.w);\n"
+            "  if (rpx < 1.0) { o = vec4(1.0); return; }\n"
+            "  float ang = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n"
+            "  float occ = 0.0, bias = 0.02 * c.z;\n"
+            "  for (int i = 0; i < 16; i++) {\n"
+            "    float t = (float(i) + 0.5) / 16.0, a = ang + float(i) * 2.39996323;\n"
+            "    vec3 v = vpos(p + ivec2(vec2(cos(a), sin(a)) * (t * rpx + 1.0))) - c;\n"
+            "    float vv = dot(v, v);\n"
+            "    float cosv = (dot(v, n) - bias) * inversesqrt(vv + 1e-3);\n"
+            "    occ += max(cosv, 0.0) * clamp(1.0 - vv / (rad * rad), 0.0, 1.0);\n"
+            "  }\n"
+            "  o = vec4(clamp(1.0 - pc.b.y * occ * (2.0 / 16.0), 0.0, 1.0), 0.0, 0.0, 1.0);\n"
+            "}\n";
+        // Depth-aware blur along b.xy (one texel steps), 9 taps: neighbours more than a few % farther or nearer than
+        // the centre don't count (no halo around silhouettes).
+        static const char *blur =
+            "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+            "layout(set = 0, binding = 1) uniform sampler2D dep;\n"
+            "void main() {\n"
+            "  ivec2 sz = textureSize(t, 0), p = ivec2(gl_FragCoord.xy);\n"
+            "  float l0 = lin(texelFetch(dep, p, 0).r), s = 0.0, w = 0.0;\n"
+            "  for (int i = -4; i <= 4; i++) {\n"
+            "    ivec2 q = clamp(p + ivec2(pc.b.xy * float(i)), ivec2(0), sz - 1);\n"
+            "    float dl = abs(lin(texelFetch(dep, q, 0).r) - l0) / (0.04 * l0);\n"
+            "    float k = exp(-float(i * i) / 10.0) * max(1.0 - dl, 0.0);\n"
+            "    s += texelFetch(t, q, 0).r * k; w += k;\n"
+            "  }\n"
+            "  o = vec4(w > 0.0 ? s / w : texelFetch(t, p, 0).r, 0.0, 0.0, 1.0);\n"
+            "}\n";
+        static char *src[2];
+        int k = !strcmp(name, "ssao_blur.frag");
+        if (!src[k]) {
+            const char *body = k ? blur : ao;
+            size_t n = strlen(common) + strlen(body) + 1;
+            src[k] = malloc(n);
+            snprintf(src[k], n, "%s%s", common, body);
+        }
+        return src[k];
+    }
+    // The occlusion onto the scene: multiplied by the pipeline's blending (exec.c), or shown alone (b.z: debug view).
+    // b.xy = 1 / the scene's size (the occlusion is at the depth's size: sampled, not fetched).
+    if (!strcmp(name, "ssao_apply.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  float a = texture(t, gl_FragCoord.xy * pc.b.xy).r;\n"
+               "  o = vec4(vec3(a), 1.0);\n"
+               "}\n";
+    }
+    // Colour adjustment (F12 menu: runtime/ui/menu.mm), on the gamma-encoded image. a = (brightness, contrast,
+    // saturation): brightness scales, contrast pivots around mid-grey, saturation mixes with the Rec. 709 luma.
+    if (!strcmp(name, "color.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  vec3 c = texelFetch(t, ivec2(gl_FragCoord.xy), 0).rgb * pc.a.x;\n"
+               "  c = (c - 0.5) * pc.a.y + 0.5;\n"
+               "  c = mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, pc.a.z);\n"
+               "  o = vec4(clamp(c, 0.0, 1.0), 1.0);\n"
+               "}\n";
+    }
     if (!strcmp(name, "clear.vert")) {
         *stage = STAGE_VERTEX;
         return "#version 450\n"

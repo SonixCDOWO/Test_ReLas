@@ -20,6 +20,13 @@ Settings g_settings = {
     .fullscreen = false,
     .fps = 30,
     .volume = 1.0f,
+    .brightness = 1.0f,
+    .contrast = 1.0f,
+    .saturation = 1.0f,
+    .ssao = false,
+    .ssao_intensity = 1.0f,
+    .ssao_radius = 80.0f,
+    .shadow_filter = SHADOW_SMOOTH,
     .mouse_sens = 0.1f,
     .stick_deadzone = 0.15f,
     .reverb = true,
@@ -47,6 +54,15 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "fps")) g_settings.fps = atoi(val) == 60 ? 60 : 30;
     else if (!strcmp(key, "render_height")) g_settings.res_height = atoi(val) >= 360 && atoi(val) <= 4320 ? atoi(val) : 0;
     else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
+    else if (!strcmp(key, "brightness")) g_settings.brightness = (float)atof(val);
+    else if (!strcmp(key, "contrast")) g_settings.contrast = (float)atof(val);
+    else if (!strcmp(key, "saturation")) g_settings.saturation = (float)atof(val);
+    else if (!strcmp(key, "ssao")) g_settings.ssao = atoi(val) != 0;
+    else if (!strcmp(key, "ssao_intensity")) g_settings.ssao_intensity = (float)atof(val);
+    else if (!strcmp(key, "ssao_radius")) g_settings.ssao_radius = (float)atof(val);
+    else if (!strcmp(key, "shadow_filter"))
+        g_settings.shadow_filter = !strcmp(val, "game") ? SHADOW_GAME : !strcmp(val, "bilinear") ? SHADOW_BILINEAR : SHADOW_SMOOTH;
+    else if (!strcmp(key, "ssao_debug")) g_settings.ssao_debug = atoi(val) != 0;  // (by hand / tests: never saved)
     else if (!strcmp(key, "mouse_sens")) g_settings.mouse_sens = (float)atof(val);
     else if (!strcmp(key, "stick_deadzone")) g_settings.stick_deadzone = (float)atof(val);
     else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
@@ -66,6 +82,16 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
     else if (!strcmp(key, "wild_battle")) g_settings.wild_battle = atoi(val) != 0;
     else bind_settings_load(key, val);  // bind_pad_* / bind_key_*: runtime/hle/bindings.c
+}
+
+static float clampf_(float v, float lo, float hi) { return v != v ? 1 : v < lo ? lo : v > hi ? hi : v; }
+void settings_clamp_color(void) {
+    g_settings.brightness = clampf_(g_settings.brightness, 0.5f, 1.5f);
+    g_settings.contrast = clampf_(g_settings.contrast, 0.5f, 1.5f);
+    g_settings.saturation = clampf_(g_settings.saturation, 0.0f, 2.0f);
+    g_settings.ssao_intensity = g_settings.ssao_intensity != g_settings.ssao_intensity ? 1 : clampf_(g_settings.ssao_intensity, 0.0f, 3.0f);
+    g_settings.ssao_radius = g_settings.ssao_radius != g_settings.ssao_radius ? 80 : clampf_(g_settings.ssao_radius, 10.0f, 400.0f);
+    if (g_settings.shadow_filter < SHADOW_GAME || g_settings.shadow_filter > SHADOW_SMOOTH) g_settings.shadow_filter = SHADOW_SMOOTH;
 }
 
 void settings_load(void) {
@@ -94,6 +120,7 @@ void settings_load(void) {
     fclose(f);
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
+    settings_clamp_color();
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
 }
 
@@ -109,6 +136,14 @@ void settings_save(void) {
     fprintf(f, "mouse_sens = %.3f\n", g_settings.mouse_sens);
     fprintf(f, "stick_deadzone = %.2f\n", g_settings.stick_deadzone);
     fprintf(f, "volume = %.2f\n", g_settings.volume);
+    fprintf(f, "brightness = %.2f\n", g_settings.brightness);
+    fprintf(f, "contrast = %.2f\n", g_settings.contrast);
+    fprintf(f, "saturation = %.2f\n", g_settings.saturation);
+    fprintf(f, "ssao = %d\n", g_settings.ssao);
+    fprintf(f, "ssao_intensity = %.2f\n", g_settings.ssao_intensity);
+    fprintf(f, "ssao_radius = %.0f\n", g_settings.ssao_radius);
+    fprintf(f, "shadow_filter = %s\n", g_settings.shadow_filter == SHADOW_GAME ? "game" :
+                                       g_settings.shadow_filter == SHADOW_BILINEAR ? "bilinear" : "smooth");
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);

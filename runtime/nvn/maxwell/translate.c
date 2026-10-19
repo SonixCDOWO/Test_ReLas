@@ -65,6 +65,7 @@ typedef struct {
     uint32_t vs_in_comp[32];
     bool uses_branches, uses_cc, uses_local, uses_vid, uses_iid, uses_frag_coord, uses_front_facing, uses_lane;
     bool uses_rscale;  // resolution-scale table (fragment/compute only)
+    bool uses_shpcf;   // depth-compare lookups go through shpcf (the shadow filter, glsl_sample)
     uint32_t flat_mask;           // fragment inputs using constant (flat) interpolation
     uint32_t noperspective_mask;  // fragment inputs using pass (linear) interpolation
     uint32_t omap_target, omap_depth;
@@ -596,6 +597,14 @@ static void glsl_sample(Ctx *c, char *out, int slot, const char *const *co, cons
     }
     char e[2000], ex[300] = "";
     if (extra) snprintf(ex, sizeof ex, ", %s", extra);
+    // Shadow-map lookups of fragment shaders (2D depth compare): shpcf, which widens each one by the filter chosen in
+    // the F12 menu (a specialization constant: glsl_finish, exec.c build_pipeline)
+    if (t->shadow && type == TEXTYPE_2D && !layer && c->stage == STAGE_FRAGMENT && lod_kind == 0) {
+        c->uses_shpcf = true;
+        snprintf(e, sizeof e, "shpcf(t%d, %s)", slot, P);
+        sprintf(out, "vec4(%s)", e);
+        return;
+    }
     if (lod_kind == 0) snprintf(e, sizeof e, "texture(t%d, %s%s)", slot, P, ex);
     else if (lod_kind == 1) snprintf(e, sizeof e, "textureLod(t%d, %s%s, %s)", slot, P, ex, lod);
     else snprintf(e, sizeof e, "texture(t%d, %s%s, %s)", slot, P, ex, lod);
@@ -1822,6 +1831,18 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     if (exact < 0) exact = getenv("LARECOMP_VK_EXACT_H2F") && atoi(getenv("LARECOMP_VK_EXACT_H2F")) != 0;
     sp(&s, "%s%s", !exact && (stage == STAGE_FRAGMENT || stage == STAGE_COMPUTE) ? glsl_h2f_native : glsl_h2f_exact,
        glsl_prelude_half);
+    // The shadow filter (F12 menu; the sampler's own filter: runtime/nvn/vulkan/textures.c vk_sampler). 0, 1: the
+    // lookup as the game wrote it (1: its sampler made bilinear, a 2x2 PCF per tap); 2: four bilinear lookups half a
+    // texel apart, a 3x3 tent per tap - the game's own taps (Let's Go: 11, Poisson-like) stay where they are.
+    info->uses_shpcf = c->uses_shpcf;
+    if (c->uses_shpcf)
+        sp(&s, "layout(constant_id = %d) const int SHADOW_Q = 0;\n"
+               "float shpcf(sampler2DShadow s, vec3 p) {\n"
+               "  if (SHADOW_Q < 2) return texture(s, p);\n"
+               "  vec2 h = 0.5f / vec2(textureSize(s, 0));\n"
+               "  return 0.25f * (texture(s, vec3(p.x - h.x, p.y - h.y, p.z)) + texture(s, vec3(p.x + h.x, p.y - h.y, p.z)) +\n"
+               "                  texture(s, vec3(p.x - h.x, p.y + h.y, p.z)) + texture(s, vec3(p.x + h.x, p.y + h.y, p.z)));\n"
+               "}\n", SHADOW_Q_SPEC_ID);
     for (int i = 0; i < 18; i++) {
         if (!(info->cbuf_mask & (1u << i))) continue;
         uint32_t n = info->cbuf_size[i] / 16;

@@ -850,6 +850,25 @@ static float vp_sx = 1, vp_sy = 1, vp_ox = 0, vp_oy = 0;
 static float tex_sc[2][64][2];
 static uint32_t tex_wh[2][64][2];
 
+// ================================================================== SSAO hook (F12 menu)
+// The game's 3D scene is one pass into a 16:9 float target with depth (Let's Go: R11G11B10F + D32S8, 1080p scaled):
+// opaque draws first, then blended ones (foliage cards, effects), then bloom and the composite read it. The occlusion
+// goes onto that target once per frame, between the two: before the first blended draw, or when the pass ends if
+// there is none. The projection comes from the draws' constant buffers (Let's Go: the scene block, vertex cbuf 5).
+static struct {
+    bool qual, busy;           // the pass running now is the scene's; ssao_run is recording
+    NvnTexture *tex;           // the scene target of this frame's count of opaque draws
+    TexBackend *color, *depth;
+    VkImageView cview;
+    VkFormat cfmt;
+    uint32_t cw, ch, opaque;
+    uint64_t frame, done_frame, proj_frame, scan_frame;
+    float proj[4];             // P00, P11, A, B (GL style: z_ndc = (A z + B) / -z)
+    int pbind;                 // where the projection was found: vertex cbuf, byte offset
+    uint32_t poff;
+} ao = {.pbind = -1};
+static void ssao_run(void);
+
 // ================================================================== render passes
 static VkFormat pass_color[8], pass_depth, pass_stencil;
 static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h;
@@ -873,6 +892,8 @@ static void vk_end_pass_at(int line) {
         else snprintf(path, sizeof path, "build/pass_%03d.png", debug_pass_no++);
         renderer_save_texture_tex(st.rt.color[0]->backend, path);
     }
+    // (the scene pass ends - a copy, a dispatch, another target - with its opaque draws done: the occlusion now)
+    if (ao.qual && !ao.busy && ao.opaque >= 16 && ao.done_frame != renderer_present_count()) ssao_run();
 }
 
 static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
@@ -957,6 +978,22 @@ static void begin_pass(void) {
     }
     if (!w) { pass_sx = pass_sy = 1; minw = minh = 16; }
     pass_w = minw; pass_h = minh;
+    ao.qual = false;
+    if (g_settings.ssao && pass_ncolor && ca[0].imageView && has_d && pass_samples == 1 && st.rt.color[0]) {
+        TexBackend *c0 = st.rt.color[0]->backend;
+        VkFormat f = pass_color[0];
+        if (c0 && c0->scalable && (f == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || f == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                                   f == VK_FORMAT_R32G32B32A32_SFLOAT)) {
+            uint64_t fr = renderer_present_count();
+            if (ao.tex != st.rt.color[0] || ao.frame != fr) { ao.tex = st.rt.color[0]; ao.frame = fr; ao.opaque = 0; }
+            ao.qual = true;
+            ao.color = c0;
+            ao.depth = st.rt.depth->backend;
+            ao.cview = ca[0].imageView;
+            ao.cfmt = f;
+            ao.cw = minw; ao.ch = minh;
+        }
+    }
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {minw, minh}}, .layerCount = 1,
                           .colorAttachmentCount = pass_ncolor, .pColorAttachments = ca,
                           .pDepthAttachment = has_d ? &da : NULL, .pStencilAttachment = has_s ? &sa : NULL};
@@ -1606,6 +1643,7 @@ typedef struct {
     uint32_t stride[17], divisor[17], used_streams;
     uint8_t blend[8][8];
     uint8_t blend_on, a2c, topo_class, poly_fill;
+    uint8_t shadow_q;  // the shadow filter (programs whose fragment shader reads a shadow map: ShaderInfo.uses_shpcf)
     uint32_t write_mask[8];
 } PipeKey;
 
@@ -1681,6 +1719,10 @@ static void build_pipeline(void *arg) {
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = k->prog->vs, .pName = "main"},
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = k->prog->fs, .pName = "main"}};
+    int32_t shadow_q = k->shadow_q;
+    VkSpecializationMapEntry sme = {SHADOW_Q_SPEC_ID, 0, sizeof shadow_q};
+    VkSpecializationInfo spi = {1, &sme, sizeof shadow_q, &shadow_q};
+    if (k->prog->fi && k->prog->fi->uses_shpcf) stages[1].pSpecializationInfo = &spi;
     VkVertexInputAttributeDescription va[32];
     VkVertexInputBindingDescription vb[17];
     VkVertexInputBindingDivisorDescriptionEXT vd[17];
@@ -2376,6 +2418,62 @@ static bool wait_built(_Atomic int *state) {
 }
 
 static uint64_t prof_tp_;
+// A GL-style perspective matrix at m (row-major: the rows of P; column-major: its columns): P00, |P11|, A, B.
+static bool ssao_proj_at(const float *m, float out[4]) {
+    if (m[1] == 0 && m[3] == 0 && m[4] == 0 && m[7] == 0 && m[12] == 0 && m[13] == 0 && m[14] == -1 && m[15] == 0 &&
+        m[0] > 0 && m[5] != 0 && m[10] < 0 && m[11] < 0) {
+        out[0] = m[0], out[1] = fabsf(m[5]), out[2] = m[10], out[3] = m[11];
+        return true;
+    }
+    if (m[1] == 0 && m[2] == 0 && m[3] == 0 && m[4] == 0 && m[6] == 0 && m[7] == 0 && m[11] == -1 && m[12] == 0 && m[13] == 0 &&
+        m[15] == 0 && m[0] > 0 && m[5] != 0 && m[10] < 0 && m[14] < 0) {
+        out[0] = m[0], out[1] = fabsf(m[5]), out[2] = m[10], out[3] = m[14];
+        return true;
+    }
+    return false;
+}
+
+// The scene's projection, from the vertex constant buffers of its draws: where it was last found, else a scan (once
+// per frame). Let's Go: row-major, near 32, far 10000 (cm).
+static void ssao_find_projection(void) {
+    uint64_t fr = renderer_present_count();
+    if (ao.proj_frame == fr) return;
+    if (ao.pbind >= 0) {
+        Range u = st.ubuf[0][ao.pbind];
+        if (u.addr && ao.poff + 64 <= u.size && ssao_proj_at((const float *)(uintptr_t)(u.addr + ao.poff), ao.proj)) {
+            ao.proj_frame = fr;
+            return;
+        }
+    }
+    if (ao.scan_frame == fr) return;
+    ao.scan_frame = fr;
+    for (int b = 0; b < 18; b++) {
+        Range u = st.ubuf[0][b];
+        if (!u.addr || u.size < 64) continue;
+        uint64_t n = u.size > 4096 ? 4096 : u.size;
+        for (uint32_t o = 0; o + 64 <= n; o += 16)
+            if (ssao_proj_at((const float *)(uintptr_t)(u.addr + o), ao.proj)) {
+                if (ao.pbind != b || ao.poff != o) LOG("[ssao] projection in vertex cbuf %d at %u: near %.3g far %.3g\n", b, o,
+                                                      ao.proj[3] / (ao.proj[2] - 1), ao.proj[3] / (ao.proj[2] + 1));
+                ao.pbind = b, ao.poff = o, ao.proj_frame = fr;
+                return;
+            }
+    }
+}
+
+// Each draw in the scene pass: opaque ones are counted (and give the projection); the first blended one after enough
+// of them ends the pass, which runs the occlusion (vk_end_pass). True: the pass must begin again.
+static bool ssao_draw_hook(void) {
+    if (ao.busy || ao.done_frame == renderer_present_count()) return false;
+    if (!(st.color_state[0] & 1)) {
+        if (st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
+        return false;
+    }
+    if (ao.opaque < 16) return false;
+    vk_end_pass();
+    return true;
+}
+
 static void draw_(CmdRec *r, bool indexed) {
     if (prof) prof_tp_ = SDL_GetTicksNS();
     if (!st.program) { SKIP(0); return; }
@@ -2462,6 +2560,7 @@ static void draw_(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.rt.ncolor; i++)
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
     begin_pass();
+    if (ao.qual && ssao_draw_hook()) begin_pass();  // (the occlusion went in before this draw: the pass again)
     VkCommandBuffer cb = vk_cmd();
 
     uint32_t mode = (uint32_t)r->x[0];
@@ -2518,6 +2617,7 @@ static void draw_(CmdRec *r, bool indexed) {
     k.a2c = st.ms[0xC] != 0;
     k.topo_class = cls;
     k.poly_fill = st.poly[2] != 1;
+    if (pr->fi->uses_shpcf) k.shadow_q = (uint8_t)g_settings.shadow_filter;
     uint64_t ph = hash_words(0xcbf29ce484222325ull, &k, sizeof k);
     if (!ph) ph = 1;
     uint32_t pslot = (uint32_t)(ph ^ (ph >> 29)) & (PIPE_TAB - 1);
@@ -3188,9 +3288,10 @@ static VkImageView raw_view(TexBackend *b) {
 static VkPipelineLayout post_layout;
 static VkDescriptorSetLayout post_set_layout;
 
-static VkPipeline post_pipeline(const char *fs) {
-    static struct { const char *fs; VkPipeline p; } cache[8];
-    for (int i = 0; i < 8; i++) if (cache[i].p && cache[i].fs == fs) return cache[i].p;
+// fmt: the output's format; blend 1: the output multiplies what is there (SSAO onto the game's scene, colour only)
+static VkPipeline post_pipeline_ex(const char *fs, VkFormat fmt, int blend) {
+    static struct { const char *fs; VkFormat fmt; int blend; VkPipeline p; } cache[16];
+    for (int i = 0; i < 16; i++) if (cache[i].p && cache[i].fs == fs && cache[i].fmt == fmt && cache[i].blend == blend) return cache[i].p;
     if (!post_layout) {
         VkDescriptorSetLayoutBinding b[3];
         for (uint32_t i = 0; i < 3; i++)
@@ -3216,11 +3317,16 @@ static VkPipeline post_pipeline(const char *fs) {
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
                                                .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
     VkPipelineColorBlendAttachmentState cba = {.colorWriteMask = 0xF};
+    if (blend == 1)
+        cba = (VkPipelineColorBlendAttachmentState){.blendEnable = VK_TRUE, .srcColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+                                                    .dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR, .colorBlendOp = VK_BLEND_OP_ADD,
+                                                    .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO, .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                                                    .alphaBlendOp = VK_BLEND_OP_ADD, .colorWriteMask = 0x7};
+    if (blend == 2) cba.colorWriteMask = 0x7;  // (replace the colour, keep alpha)
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1,
                                               .pAttachments = &cba};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
-    VkFormat fmt = VK_FORMAT_R8G8B8A8_UNORM;
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .colorAttachmentCount = 1,
                                         .pColorAttachmentFormats = &fmt};
     VkPipelineDepthStencilStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
@@ -3230,14 +3336,15 @@ static VkPipeline post_pipeline(const char *fs) {
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = post_layout};
     VkPipeline p;
     VK_CHECK(vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &p));
-    for (int i = 0; i < 8; i++) if (!cache[i].p) { cache[i].fs = fs; cache[i].p = p; break; }
+    for (int i = 0; i < 16; i++) if (!cache[i].p) { cache[i].fs = fs; cache[i].fmt = fmt; cache[i].blend = blend; cache[i].p = p; break; }
     return p;
 }
+static VkPipeline post_pipeline(const char *fs) { return post_pipeline_ex(fs, VK_FORMAT_R8G8B8A8_UNORM, 0); }
 
 // Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
-// 3, 4: FSR EASU / RCAS.
+// 3, 4: FSR EASU / RCAS, 5: colour adjustment, 6, 7: SSAO (occlusion, blur).
 static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
-    static TexBackend img[5];
+    static TexBackend img[8];
     TexBackend *d = &img[i];
     if (d->image && (d->width != w || d->height != h)) {
         vk_views_forget(d);
@@ -3291,15 +3398,15 @@ static VkImageView smaa_lut(int i) {
 
 // One post pass (outside the window image's rendering): srcs (bindings 0..n-1) -> dst, fragment shader `fs`.
 // clear: start from zero (SMAA's edge pass only writes edge pixels; its weights / output read them).
-static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *srcs, int n, TexBackend *dst, const float pc[8],
-                      bool clear) {
-    VkPipeline pipe = post_pipeline(fs);  // (before the rendering begins: created inside it, the NVIDIA driver crashed)
+// (any view: pipe made for its format by post_pipeline_ex; load: keep what is there - blending onto it)
+static void post_pass_view(VkCommandBuffer cb, VkPipeline pipe, const VkImageView *srcs, int n, VkImageView dv, uint32_t dw,
+                           uint32_t dh, const float pc[8], bool clear, bool load) {
     vk_full_barrier(cb);
-    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = post_view(dst),
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = dv,
                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-                                    .loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                    .loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
-    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {dst->width, dst->height}},
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {dw, dh}},
                           .layerCount = 1, .colorAttachmentCount = 1, .pColorAttachments = &ca};
     vkCmdBeginRendering(cb, &ri);
     VkDescriptorSet ds = vk_alloc_set(post_set_layout);
@@ -3314,13 +3421,57 @@ static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *src
     vkUpdateDescriptorSets(g_vk.dev, (uint32_t)n, w, 0, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, post_layout, 0, 1, &ds, 0, NULL);
-    VkViewport vp = {0, 0, (float)dst->width, (float)dst->height, 0, 1};
-    VkRect2D sc = {{0, 0}, {dst->width, dst->height}};
+    VkViewport vp = {0, 0, (float)dw, (float)dh, 0, 1};
+    VkRect2D sc = {{0, 0}, {dw, dh}};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
     vkCmdDraw(cb, 3, 1, 0, 0);
     vkCmdEndRendering(cb);
+}
+
+static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *srcs, int n, TexBackend *dst, const float pc[8],
+                      bool clear) {
+    VkPipeline pipe = post_pipeline(fs);  // (before the rendering begins: created inside it, the NVIDIA driver crashed)
+    post_pass_view(cb, pipe, srcs, n, post_view(dst), dst->width, dst->height, pc, clear, false);
+}
+
+// The occlusion onto the scene target (outside any pass: vk_end_pass, ssao_draw_hook): occlusion from the depth at its
+// size -> blur across -> blur down -> multiplied onto the scene's colour (the debug view: replaces it).
+static void ssao_run(void) {
+    uint64_t fr = renderer_present_count();
+    ao.done_frame = fr;
+    TexBackend *d = ao.depth;
+    if (ao.proj_frame != fr || !d || !d->image || !(d->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || d->samples > 1) return;
+    ao.busy = true;
+    VkCommandBuffer cb = vk_cmd();
+    static const VkComponentMapping id = {0};
+    VkImageView dv = vk_image_view(d, VK_IMAGE_VIEW_TYPE_2D, d->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
+    uint32_t w = d->width, h = d->height;
+    // (pipelines and images before any rendering begins)
+    VkPipeline p_ao = post_pipeline("ssao.frag"), p_blur = post_pipeline("ssao_blur.frag");
+    VkPipeline p_apply = post_pipeline_ex("ssao_apply.frag", ao.cfmt, g_settings.ssao_debug ? 2 : 1);
+    TexBackend *a0 = post_image(6, w, h), *a1 = post_image(7, w, h);
+    float mo = nvn_depth_mode() == 0 ? 1.0f : 0.0f;
+    float pc[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], g_settings.ssao_radius, g_settings.ssao_intensity, mo,
+                   0.08f * (float)h};
+    post_pass_view(cb, p_ao, &dv, 1, post_view(a0), w, h, pc, false, false);
+    float pb[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 1, 0, mo, 0};
+    VkImageView bx[3] = {post_view(a0), dv};
+    post_pass_view(cb, p_blur, bx, 2, post_view(a1), w, h, pb, false, false);
+    pb[4] = 0, pb[5] = 1;
+    VkImageView by[3] = {post_view(a1), dv};
+    post_pass_view(cb, p_blur, by, 2, post_view(a0), w, h, pb, false, false);
+    float pa[8] = {0, 0, 0, 0, 1.0f / (float)ao.cw, 1.0f / (float)ao.ch};
+    VkImageView ai[3] = {post_view(a0)};
+    post_pass_view(cb, p_apply, ai, 1, ao.cview, ao.cw, ao.ch, pa, false, true);
+    vk_full_barrier(cb);
+    ao.busy = false;
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        LOG("[ssao] scene %ux%u, depth %ux%u (format %d), %u opaque draws before it\n", ao.cw, ao.ch, w, h, (int)d->format, ao.opaque);
+    }
 }
 
 // The view the present samples: the game image, or its anti-aliased / upscaled version. ow x oh: the whole image's
@@ -3332,7 +3483,9 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     if (ow > 16384) ow = 16384;
     if (oh > 16384) oh = 16384;
     bool fsr = g_settings.upscaler == UPSCALE_FSR1 && (ow > b->width + 1 || oh > b->height + 1);  // (an upscale only)
-    if (!smaa && !fsr) return v;
+    float grade[3] = {g_settings.brightness, g_settings.contrast, g_settings.saturation};  // (F12 menu)
+    bool color = fabsf(grade[0] - 1) > 0.005f || fabsf(grade[1] - 1) > 0.005f || fabsf(grade[2] - 1) > 0.005f;
+    if (!smaa && !fsr && !color) return v;
     extern void vk_frame_suspend(void);
     extern void vk_frame_resume(void);
     vk_frame_suspend();
@@ -3348,6 +3501,13 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         VkImageView bi[3] = {v, post_view(weights)};
         post_pass(cb, "smaa_blend.frag", bi, 2, out, m, false);
         v = post_view(out);
+    }
+    if (color) {  // after SMAA (its edges are found on the game's own colours), before FSR (at the smaller size)
+        float pc[8] = {grade[0], grade[1], grade[2]};
+        TexBackend *c = post_image(5, b->width, b->height);
+        VkImageView ci[3] = {v};
+        post_pass(cb, "color.frag", ci, 1, c, pc, false);
+        v = post_view(c);
     }
     if (fsr) {
         float iw = (float)b->width, ih = (float)b->height;

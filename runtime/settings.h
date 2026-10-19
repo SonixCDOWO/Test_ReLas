@@ -8,6 +8,8 @@ enum { UPSCALE_BILINEAR = 0, UPSCALE_FSR1 = 2 /* AMD FSR 1 */ };
 #define UPSCALE_SHARP UPSCALE_FSR1  // the non-bilinear upscaler (the default)
 enum { AA_OFF = 0, AA_SMAA = 1 };
 enum { VREAD_AUTO = 0, VREAD_COPY = 1, VREAD_DIRECT = 2 };
+// the game's (each of its taps a hard in / out), each tap bilinear (2x2 PCF), each tap a 3x3 tent (4 bilinear lookups)
+enum { SHADOW_GAME = 0, SHADOW_BILINEAR = 1, SHADOW_SMOOTH = 2 };
 
 typedef struct {
     bool fullscreen;
@@ -17,6 +19,14 @@ typedef struct {
     int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
+    float brightness;    // colour of the game image (F12 menu, runtime/ui/menu.mm; post pass in runtime/nvn/vulkan/exec.c):
+    float contrast;      // 1 = unchanged for all three; brightness / contrast 0.5..1.5, saturation 0..2
+    float saturation;
+    bool ssao;            // screen-space ambient occlusion on the game's HDR scene (F12 menu; runtime/nvn/vulkan/exec.c)
+    float ssao_intensity; // 0..3, 1 = the default strength
+    float ssao_radius;    // in the game's world units (~cm): 10..400
+    bool ssao_debug;      // (not saved) the scene shows the occlusion alone
+    int shadow_filter;    // SHADOW_*: how the shadow map is filtered (F12 menu; textures.c vk_sampler, translate.c shpcf)
     float mouse_sens;    // mouse aim (the virtual gyro, runtime/hle/input.c): degrees per pixel
     float stick_deadzone;  // a controller's sticks: the share of their travel read as rest (runtime/hle/input.c)
     bool reverb;         // room reverb effect
@@ -34,3 +44,4 @@ extern Settings g_settings;
 
 void settings_load(void);
 void settings_save(void);
+void settings_clamp_color(void);  // brightness / contrast / saturation / SSAO into their ranges

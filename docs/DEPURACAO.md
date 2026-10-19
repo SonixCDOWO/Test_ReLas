@@ -12,6 +12,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_NO_AUDIO=1` | sem áudio (testes automáticos) |
 | `LARECOMP_FONT=<arquivo>` | fonte do sistema entregue ao jogo no lugar da lista padrão (`runtime/hle/pl.c`; a Yu Gothic Regular de alguns Win10 derruba o motor de fontes, issue #1) |
 | `LARECOMP_LANG=en\|pt\|ru` | idioma do menu sobreposto (fechar o jogo, teclado do nome); sem ela, o idioma do sistema |
+| `LARECOMP_MENU_KEY=<tecla>` | outra tecla para o menu de configurações (padrão `F12`; nome de scancode do SDL: `F10`, `Insert`...) |
 | `LARECOMP_SWKBD_UTF8=1` | teclado devolve UTF-8 em vez de UTF-16 |
 | `LARECOMP_GYRO_TEST=x\|y\|z` | giroscópio virtual oscilando ±15° no eixo dado (`z+` / `x-`...: giro de 10° em rampa 1 s depois do início da mira); loga quando o jogo lê o sensor. Para chegar a uma captura: andar pela grama (`STICK_*`) e apertar A no "Get ready"; o encontro é sorteado, repita até o log ter `sensor started` |
 | `mod` / `game_lang` (larecomp.ini) | mod ativo (`mods/<nome>/`, o log mostra `[mods]` e quantos arquivos do romfs foram trocados) / idioma pedido ao sistema (`en-US`, `es`...; um save existente mantém o seu) |

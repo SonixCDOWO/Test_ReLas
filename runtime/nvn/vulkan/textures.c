@@ -11,6 +11,7 @@
 #include "vk.h"
 #include "../astc.h"
 #include "../renderer.h"
+#include "../../settings.h"
 
 // ================================================================== formats
 // expand_rgb: converted to RGBA8 on upload - 1 RGB8, 2 RGBA4 and 3 RGB5A1 (16-bit, red in the low bits: the
@@ -820,12 +821,13 @@ static VkCompareOp compare_op(uint32_t f) {
     }
 }
 
-VkSampler vk_sampler(NvnSamplerDesc *d) {
-    if (d->backend) return (VkSampler)d->backend;
+// shadow_linear: a depth-compare sampler filters bilinearly whatever the game asked (the shadow filter, F12 menu)
+static VkSampler sampler_create(const NvnSamplerDesc *d, bool shadow_linear) {
     VkSamplerCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     si.magFilter = d->mag_filter == 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     uint32_t mf = d->min_filter;
     si.minFilter = (mf == 1 || mf == 3 || mf == 5) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    if (d->compare_mode && shadow_linear) si.magFilter = si.minFilter = VK_FILTER_LINEAR;
     si.mipmapMode = mf == 4 || mf == 5 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
     VkSamplerAddressMode modes[3];
     bool border = false;
@@ -879,7 +881,32 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     }
     VkSampler s;
     VK_CHECK(vkCreateSampler(g_vk.dev, &si, NULL, &s));
-    d->backend = (void *)s;
+    return s;
+}
+
+// Let's Go's shadow map is sampled with nearest filtering (each of its 11 taps a hard in / out: stair-stepped edges);
+// SHADOW_BILINEAR / SHADOW_SMOOTH make each tap a bilinear compare (2x2 PCF), the depth formats permitting. Depth-
+// compare samplers live in their own table, by description and filter, so a change in the menu takes at once.
+VkSampler vk_sampler(NvnSamplerDesc *d) {
+    if (!d->compare_mode) {
+        if (!d->backend) d->backend = (void *)sampler_create(d, false);
+        return (VkSampler)d->backend;
+    }
+    static int linear_ok = -1;
+    if (linear_ok < 0) {
+        linear_ok = format_supports(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) &&
+                    format_supports(VK_FORMAT_D32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
+        LOG("[vk] shadow map: %s\n", linear_ok ? "bilinear compare available" : "no linear filtering on depth formats, the game's filter");
+    }
+    bool lin = linear_ok && g_settings.shadow_filter != SHADOW_GAME;
+    static struct { NvnSamplerDesc d; bool lin; VkSampler s; } tab[64];
+    static int n;
+    NvnSamplerDesc k = *d;
+    k.backend = NULL;
+    for (int i = 0; i < n; i++)
+        if (tab[i].lin == lin && !memcmp(&tab[i].d, &k, sizeof k)) return tab[i].s;
+    VkSampler s = sampler_create(&k, lin);
+    if (n < 64) tab[n].d = k, tab[n].lin = lin, tab[n].s = s, n++;  // (past 64: a new one each time - not seen in the game)
     return s;
 }
 
