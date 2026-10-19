@@ -28,6 +28,7 @@ Settings g_settings = {
     .ssao_radius = 100.0f,
     .ssao_temporal = true,
     .shadow_filter = SHADOW_SMOOTH,
+    .ui2x = true,
     .mv_objects = true,
     .taa_sharpness = 0.5f,
     .fsr3_preset = FSR3_QUALITY,
@@ -83,6 +84,7 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "gi_resolution")) g_settings.gi_div = atoi(val);
     else if (!strcmp(key, "gi_temporal")) g_settings.gi_temporal = atoi(val) != 0;
     else if (!strcmp(key, "gi_debug")) g_settings.gi_debug = atoi(val) != 0;  // (by hand / tests: never saved)
+    else if (!strcmp(key, "ui2x")) g_settings.ui2x = atoi(val) != 0;
     else if (!strcmp(key, "shadow_filter"))
         g_settings.shadow_filter = !strcmp(val, "game") ? SHADOW_GAME : !strcmp(val, "bilinear") ? SHADOW_BILINEAR : SHADOW_SMOOTH;
     else if (!strcmp(key, "ssao_debug")) g_settings.ssao_debug = atoi(val) != 0;  // (by hand / tests: never saved)
@@ -199,6 +201,7 @@ void settings_save(void) {
     fprintf(f, "gi_steps = %d\n", g_settings.gi_steps);
     fprintf(f, "gi_resolution = %d\n", g_settings.gi_div);
     fprintf(f, "gi_temporal = %d\n", g_settings.gi_temporal);
+    fprintf(f, "ui2x = %d\n", g_settings.ui2x);
     fprintf(f, "shadow_filter = %s\n", g_settings.shadow_filter == SHADOW_GAME ? "game" :
                                        g_settings.shadow_filter == SHADOW_BILINEAR ? "bilinear" : "smooth");
     fprintf(f, "reverb = %d\n", g_settings.reverb);

@@ -12,6 +12,7 @@
 #include "../astc.h"
 #include "../renderer.h"
 #include "../../settings.h"
+#include "../../ui2x.h"
 
 // ================================================================== formats
 // expand_rgb: converted to RGBA8 on upload - 1 RGB8, 2 RGBA4 and 3 RGB5A1 (16-bit, red in the low bits: the
@@ -206,6 +207,7 @@ void renderer_texture_scale(NvnTexture *t, float *sx, float *sy) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     if (b && b->scalable) { *sx = b->sx; *sy = b->sy; }
     else if (b && b->font_k > 1) { *sx = *sy = b->font_k; }
+    else if (b && b->ui2x) { *sx = (float)b->ui2x_w / (float)t->width; *sy = (float)b->ui2x_h / (float)t->height; }
     else { *sx = 1; *sy = 1; }
 }
 
@@ -269,6 +271,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     }
     b->font_k = font_cache_k(t);
     if (b->font_k > 1) { tw *= b->font_k; th *= b->font_k; }
+    if (b->ui2x) tw = b->ui2x_w, th = b->ui2x_h;
     VkImageType type = VK_IMAGE_TYPE_2D;
     uint32_t layers = 1, depth = 1;
     switch (t->target) {
@@ -290,6 +293,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     uint32_t samples = t->samples > 1 ? t->samples : 1;
     if (samples > 1) levels = 1;
     VkFormat vf = mf.vf;
+    if (b->ui2x) vf = b->ui2x_fmt, levels = 1;
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     b->astc_bw = b->astc_bh = 0;
     if (!format_supports(vf, need)) {
@@ -463,6 +467,14 @@ static uint64_t hash_full(const uint8_t *p, uint64_t n) {
     return h ^ (h >> 31);
 }
 
+// A texture's content key (LARECOMP_TEXKEY_LOG=1: logged at each upload): runtime/ui2x.c's, of level 0's block rows
+// untiled - tools/ui_texkeys.py computes the same from the game files.
+static void texkey_log(const NvnTexture *t, const uint8_t *lin, uint64_t n, uint32_t bpb) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_TEXKEY_LOG") != NULL;
+    if (on) LOG("[texkey] %016llx %ux%u nvn %#x bpb %u levels %u\n", (unsigned long long)ui2x_key(lin, n), t->width, t->height, t->format, bpb, t->levels);
+}
+
 static uint64_t fnv_sample(const uint8_t *p, uint64_t n) {
     uint64_t h = 1469598103934665603ull;
     uint64_t step = n > 4096 ? n / 4096 : 1;
@@ -529,6 +541,63 @@ static bool font_cache_use(NvnTexture *t, TexBackend *b) {
     return false;
 }
 
+// An interface texture with a 2x version (runtime/ui2x.c): a plain 2D texture of one level (not a render target or
+// linear: flags 8, 0x10), of the formats the
+// interface uses, whose level 0 untiled has a key in cache/ui2x.pak. True: b now holds the 2x image (made again at that
+// size and format when needed). False: not one (b back to the game's own size if it was one before).
+static bool ui2x_candidate(const NvnTexture *t) {
+    if (t->target != 1 || t->levels > 1 || (t->flags & 0x18) || !t->layout.fmt || t->layout.layers > 1) return false;
+    uint32_t f = t->format;  // BC1-BC5, BC7 (unorm / sRGB), RGBA8, RGB5A1 (the Pokemon icons), R8, RG8
+    return (f >= 0x42 && f <= 0x4e) || f == 0x25 || f == 0x01 || f == 0x0d || fmt_of(f).expand_rgb >= 2;
+}
+static bool ui2x_apply(NvnTexture *t, TexBackend *b, uint64_t data_hash) {
+    b->ui2x_hash = data_hash;
+    const FormatInfo *fi = t->layout.fmt;
+    LevelLayout l = tegra_level(&t->layout, 0);
+    uint64_t n = (uint64_t)l.wb * l.hb * fi->bpb;
+    uint8_t *lin = malloc(n);
+    Ui2xTex x = {0};
+    bool found = false;
+    if (lin) {
+        tegra_deswizzle((const uint8_t *)(uintptr_t)t->addr, lin, l.wb, l.hb, 1, fi->bpb, l.block_height_log2, l.block_depth_log2);
+        found = ui2x_find(ui2x_key(lin, n), t->width, t->height, &x);
+        free(lin);
+    }
+    static const VkFormat vkf[] = {VK_FORMAT_BC1_RGBA_UNORM_BLOCK, VK_FORMAT_BC3_UNORM_BLOCK, VK_FORMAT_BC4_UNORM_BLOCK,
+                                   VK_FORMAT_BC5_UNORM_BLOCK};
+    if (!found) {
+        if (b->ui2x) { b->ui2x = 0; destroy_image(b); create_image(t, b); }
+        return false;
+    }
+    VkFormat f = vkf[x.fmt & 3];
+    if (fmt_of(t->format).vf == VK_FORMAT_BC1_RGBA_SRGB_BLOCK || fmt_of(t->format).vf == VK_FORMAT_BC3_SRGB_BLOCK ||
+        fmt_of(t->format).vf == VK_FORMAT_BC7_SRGB_BLOCK || fmt_of(t->format).vf == VK_FORMAT_BC2_SRGB_BLOCK)
+        f = f == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK : f == VK_FORMAT_BC3_UNORM_BLOCK ? VK_FORMAT_BC3_SRGB_BLOCK : f;
+    if (!b->ui2x || b->ui2x_fmt != f || b->ui2x_w != x.w || b->ui2x_h != x.h || !b->image) {
+        b->ui2x = 1, b->ui2x_fmt = f, b->ui2x_w = x.w, b->ui2x_h = x.h;
+        destroy_image(b);
+        create_image(t, b);
+    }
+    if (b->format != f) {  // (the format isn't there: the game's own)
+        b->ui2x = 0;
+        destroy_image(b);
+        create_image(t, b);
+        free(x.data);
+        return false;
+    }
+    VkSpan s = vk_transient(x.size, 16);
+    memcpy(s.ptr, x.data, x.size);
+    free(x.data);
+    VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = (x.w + 3) / 4 * 4, .bufferImageHeight = (x.h + 3) / 4 * 4,
+                            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {x.w, x.h, 1}};
+    VkCommandBuffer cb = vk_upload_cmd();
+    vk_dl_note_upload((void *)b->image, x.w, x.h, 0);
+    vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    static int nlog;
+    if (nlog++ < 8) LOG("[ui2x] texture %ux%u fmt %#x at %llx -> %ux%u\n", t->width, t->height, t->format, (unsigned long long)t->addr, x.w, x.h);
+    return true;
+}
+
 static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (!t->addr || t->target == 10) return;
     uint64_t frame = vk_frame_counter();
@@ -560,6 +629,8 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (b->uploaded && h != b->data_hash) b->dynamic = true;
     b->data_hash = h;
     b->uploaded = true;
+    // the interface at 2x (runtime/ui2x.c): checked whenever the data is new
+    if ((b->ui2x || (ui2x_candidate(t) && ui2x_enabled())) && ui2x_apply(t, b, h)) return;
     if (b->format != mf.vf && !b->astc_bw) return;  // unsupported format: nothing sensible to copy
     VkCommandBuffer cb = vk_upload_cmd();
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
@@ -575,6 +646,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 uint8_t *blocks = malloc((uint64_t)l.wb * l.hb * 16);
                 if (linear) for (uint32_t y = 0; y < l.hb; y++) memcpy(blocks + (uint64_t)y * l.wb * 16, src + (uint64_t)y * t->stride, l.wb * 16);
                 else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
+                if (lv == 0 && layer == 0) texkey_log(t, blocks, (uint64_t)l.wb * l.hb * 16, 16);
                 VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
                 astc_decode_ldr(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
                 free(blocks);
@@ -597,6 +669,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             } else {
                 tegra_deswizzle(src, lin, l.wb, l.hb, l.d, fi->bpb, l.block_height_log2, l.block_depth_log2);
             }
+            if (lv == 0 && layer == 0 && l.d == 1) texkey_log(t, lin, (uint64_t)row * l.hb, fi->bpb);
             static int dump_fmt = -2;  // LARECOMP_DUMP_TEX_FMT=<nvn format>: level 0 of those textures, untiled -> build/tex/
             if (dump_fmt == -2) dump_fmt = getenv("LARECOMP_DUMP_TEX_FMT") ? (int)strtol(getenv("LARECOMP_DUMP_TEX_FMT"), NULL, 0) : -1;
             if ((int)t->format == dump_fmt && lv == 0 && layer == 0) {

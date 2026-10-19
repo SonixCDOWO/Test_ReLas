@@ -73,6 +73,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_GI_DEBUG_EXPOSURE=<x>` | exposição da vista "só a luz indireta" (GI) do menu avançado; padrão 16 (a cena HDR do jogo é escura antes da exposição dele) |
 | `LARECOMP_MVO_PROBE=<frame>` | registra, para cada draw com vetores por objeto daquele quadro, os blocos de constantes do quadro anterior: idênticos, faltando (`MISSING`) ou rejeitados por salto (`REJECTED`, com a palavra e os valores) |
 | `LARECOMP_FSR3_MASK_DUMP=<frame>` | salva a máscara da interface que o FSR 3.1 recebe naquele quadro em `build/frames/uimask_N.png` |
+| `LARECOMP_UI2X_GENERATE=1` | a tela inicial gera as imagens da interface em 2x (`runtime/ui2x.c`, como o botão) e sai: status 0 se terminou; o passo a passo vai para o log (`[ui2x]`) |
+| `LARECOMP_TEXKEY_LOG=1` | registra a chave de conteúdo de cada textura enviada da CPU (`[texkey] <chave de 64 bits> <w>x<h> nvn <formato> ...`: CRC-32 e Adler-32 do nível 0 desentrelaçado, `ui2x_key`, a mesma de `cache/ui2x.pak`). `tools/ui_texkeys.py <romfs.bin> <saída.tsv> [<log>]` calcula a mesma chave para todas as texturas da interface nos arquivos do jogo e diz quais do log batem |
 | `LARECOMP_FONT_SCALE=<1..4>` | força a escala do texto (`runtime/hle/font_hires.c`) em vez da automática pela altura da janela; `1` desliga (para comparar) |
 | `LARECOMP_FONT_LOG=1` | registra os primeiros 400 glifos que o cache de fonte do jogo desenha (código, tamanho, métricas em 1x e em Nx, célula e linha) e o tamanho das texturas de cache em Nx (`runtime/hle/font_hires.c`) |
 | `LARECOMP_MV_YSIGN=-1` | (validação) inverte a convenção de y NDC dos vetores de movimento; o certo no Let's Go é o padrão (+1) |

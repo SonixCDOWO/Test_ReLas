@@ -36,6 +36,7 @@ typedef struct {
     bool mv_objects;      // per-object motion vectors (characters' own motion) when motion vectors are in use (default on)
     float taa_sharpness;  // TAA: RCAS sharpening at the present, 0..1 (default 0.5)
     int fsr3_preset;      // FSR3_*: with the FSR 3.1 upscaler, the render resolution (default FSR3_QUALITY)
+    bool ui2x;            // the interface textures at 2x when cache/ui2x.pak was made (start screen; runtime/ui2x.c)
     int shadow_filter;    // SHADOW_*: how the shadow map is filtered (F12 menu; textures.c vk_sampler, translate.c shpcf)
     // screen-space indirect light, one bounce (F12 menu / advanced; runtime/nvn/vulkan/exec.c gi_run). World units ~cm
     bool gi;

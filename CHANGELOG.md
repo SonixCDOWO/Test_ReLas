@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Sharper interface (2x)**, optional: a start-screen button makes the game's menu and interface images again at
+  twice their resolution from the player's own game files - nothing of the game ships with the app. Every texture of
+  the interface archives (`bin/app/*.arc`, 3081 different images, 316 more in formats left out) is decoded, upscaled by
+  waifu2x-ncnn-vulkan (CUnet, light denoising; downloaded once from GitHub, 35 MB, checked by its SHA-256) and
+  compressed again (BC1 / BC3 / BC4 / BC5) into `cache/ui2x.pak` (~670 MB). In the game a texture is matched by the
+  key of its content and drawn from its 2x version at the same place. RTX 5070 Ti: about a minute (14 s reading the
+  images, 17 s upscaling, 25 s compressing). A box on the start screen turns them off (`ui2x = 0`). The Real-ESRGAN
+  build tried first loses the device on RTX 50 GPUs (2022 ncnn); waifu2x's 2025 build runs there.
 - **Fixes SSAO, GI, TAA and FSR 3.1 flickering in cutscenes and menus at 60 fps**: there the game runs at 30 and an
   in-between image is drawn by replaying the frame; that image shared the frame's number, so the scene effects (which
   run once per frame) skipped it and every other image on screen went out without occlusion, indirect light or
