@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **2x interface checked before it is packed**: waifu2x once (in seven runs) exited normally with garbage for every
+  image, and the menus' icons came out as noise. Each 2x image, taken back down to 1x, must now match the original
+  (good ones differ by up to 7 of 255, that garbage by 66 or more); with more than 10% off, no pack is written and the
+  start screen says to try again.
 - **Fixes many 2x interface images showing wrong** (partly or wholly transparent): waifu2x-ncnn-vulkan 20250915
   loses the alpha of an RGBA image outside its last tiles (a fully opaque 512x288 image came out 25/32 transparent).
   Images are now upscaled as RGB only - with transparency, their colour and their alpha (as a grey image) separately,
