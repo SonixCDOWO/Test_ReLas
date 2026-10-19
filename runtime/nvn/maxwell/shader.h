@@ -43,6 +43,15 @@ typedef struct {
     bool flip_y;            // lower-left window origin
     uint32_t vs_out_mask;   // fragment: varyings the vertex shader provides
     uint8_t glsl;           // emit Vulkan GLSL (see the contract above) instead of MSL
+    // Per-object motion vectors (runtime/nvn/vulkan/exec.c, the scene pass): the vertex shader runs its body a second
+    // time on the previous frame's constant buffers (pcb<k>, bindings 100 + k, for k >= 3) and hands both clip
+    // positions to the fragment shader (varyings 30, 31), which writes the velocity to colour target vel_rt.
+    uint8_t velocity;
+    uint8_t vel_vs;         // fragment: the vertex shader provides the two positions
+    uint8_t vel_rt;         // fragment: the velocity's colour target
+    // vertex: TAA's sub-pixel jitter (exec.c taa_*): clip xy += jit.xy * w, from a uniform at binding 20, after the
+    // positions the velocity is computed from (the velocity carries no jitter)
+    uint8_t jitter;
 } ShaderKey;
 
 typedef struct {
@@ -69,6 +78,7 @@ typedef struct {
     bool uses_rscale;       // reads the resolution-scale table (fragment/compute buffer 18): float4 [0] = render
                             // target scale, [1 + i] = allocation scale of texture i
     bool uses_shpcf;        // fragment: shadow-map lookups take the shadow filter (specialization constant SHADOW_Q_SPEC_ID)
+    bool vel;               // ShaderKey.velocity took: vertex, both positions out; fragment, the velocity written
     uint32_t local_mem;     // bytes of local memory
     uint32_t num_insts;
     char error[256];        // set when translation fails

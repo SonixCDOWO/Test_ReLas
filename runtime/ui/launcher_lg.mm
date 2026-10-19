@@ -216,7 +216,7 @@ extern "C" void launcher_lg_run(const char *root) {
     static const int res_lines[] = {0, 720, 1080, 1440, 2160};
     int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
-    bool full = g_settings.fullscreen, smaa = g_settings.antialias == AA_SMAA, fps60 = g_settings.fps == 60,
+    bool full = g_settings.fullscreen, smaa = g_settings.antialias != AA_OFF, fps60 = g_settings.fps == 60,
          wildb = g_settings.wild_battle;
     // Translation: the folders under mods/ (runtime/mods.h); 0 = none (the game's own English)
     static char mods[MODS_MAX][128];
@@ -270,7 +270,7 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::PushItemWidth(420);
         ImGui::Combo(T("Resolution", "Resolução"), &res, g_pt ? res_pt : res_en, 5);
         if (ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full)) SDL_SetWindowFullscreen(win, full);
-        ImGui::Checkbox(T("Anti-aliasing (SMAA)", "Suavizar serrilhado (SMAA)"), &smaa);
+        ImGui::Checkbox(T("Anti-aliasing", "Suavizar serrilhado"), &smaa);
         // (both hook game functions by address: builds without address tables keep them off, runtime/fnhook.c)
         bool known = !setup_ready() || game_build("extracted/exefs") != GAME_BUILD_OTHER;
         const char *only = T("Only with version 1.0.0 (the base game) of Eevee or Pikachu for now.",
@@ -322,7 +322,8 @@ extern "C" void launcher_lg_run(const char *root) {
     }
     g_settings.res_height = res_lines[res];
     g_settings.fullscreen = full;
-    g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
+    // (the box is anti-aliasing on / off: TAA, chosen in the F12 menu, stays TAA)
+    g_settings.antialias = !smaa ? AA_OFF : g_settings.antialias == AA_TAA ? AA_TAA : AA_SMAA;
     g_settings.fps = fps60 ? 60 : 30;
     g_settings.wild_battle = wildb;
     snprintf(g_settings.mod, sizeof g_settings.mod, "%s", mod ? mods[mod - 1] : "");

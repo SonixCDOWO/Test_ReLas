@@ -468,8 +468,25 @@ static void cfg_advanced(float scale, bool *close) {
     const char *l_int = M("Intensity", "Intensidade", "Сила"), *l_rad = M("Radius", "Raio", "Радиус"),
                *l_thick = M("Thickness", "Espessura", "Толщина"), *l_rays = M("Rays", "Raios", "Лучи"),
                *l_steps = M("Steps", "Passos", "Шаги"), *l_res = M("Resolution", "Resolução", "Разрешение");
-    const char *labels[] = {l_int, l_rad, l_thick, l_rays, l_steps, l_res};
-    float x = cfg_label_x(labels, 6);
+    const char *l_bri = M("Brightness", "Brilho", "Яркость"), *l_con = M("Contrast", "Contraste", "Контраст"),
+               *l_sat = M("Saturation", "Saturação", "Насыщенность");
+    const char *labels[] = {l_int, l_rad, l_thick, l_rays, l_steps, l_res, l_bri, l_con, l_sat};
+    float x = cfg_label_x(labels, 9);
+    // the image's colour (runtime/nvn/vulkan/exec.c post_process, color.frag)
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Image", "Imagem", "Изображение"));
+    {
+        struct Row { const char *label; float *v, lo, hi; } rows[] = {
+            {l_bri, &g_settings.brightness, 0.5f, 1.5f}, {l_con, &g_settings.contrast, 0.5f, 1.5f}, {l_sat, &g_settings.saturation, 0.0f, 2.0f}};
+        for (int i = 0; i < 3; i++) {
+            float pct = *rows[i].v * 100;
+            cfg_row(rows[i].label, x);
+            ImGui::PushID(100 + i);
+            if (ImGui::SliderFloat("##c", &pct, rows[i].lo * 100, rows[i].hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *rows[i].v = pct / 100;
+            ImGui::PopID();
+            if (!i) ImGui::SetItemDefaultFocus();
+        }
+    }
+    ImGui::Separator();
     // SSAO (runtime/nvn/vulkan/exec.c ssao_run)
     ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)"));
     ImGui::BeginDisabled(!g_settings.ssao);
@@ -477,7 +494,6 @@ static void cfg_advanced(float scale, bool *close) {
         float pct = g_settings.ssao_intensity * 100;
         cfg_row(l_int, x);
         if (ImGui::SliderFloat("##ssao_i", &pct, 0, 300, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.ssao_intensity = pct / 100;
-        ImGui::SetItemDefaultFocus();
         cfg_row(l_rad, x);
         ImGui::SliderFloat("##ssao_r", &g_settings.ssao_radius, 10, 400, "%.0f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::Checkbox(M("Accumulate over frames##ssao", "Acumular entre quadros##ssao", "Накопление по кадрам##ssao"), &g_settings.ssao_temporal);
@@ -510,8 +526,18 @@ static void cfg_advanced(float scale, bool *close) {
         ImGui::Checkbox(M("Show the indirect light alone", "Mostrar só a luz indireta", "Только непрямой свет"), &g_settings.gi_debug);
     }
     ImGui::EndDisabled();
-    // (debug) the camera motion vectors the temporal effects build on (runtime/nvn/vulkan/exec.c mv_run)
+    // TAA and the motion vectors (runtime/nvn/vulkan/exec.c taa_run, mv_run; per object: maxwell/translate.c velocity)
     ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Temporal (TAA / FSR 3.1)", "Temporal (TAA / FSR 3.1)", "Временное (TAA / FSR 3.1)"));
+    ImGui::BeginDisabled(g_settings.antialias != AA_TAA && g_settings.upscaler != UPSCALE_FSR3);  // (FSR 3.1's sharpening too)
+    {
+        float pct = g_settings.taa_sharpness * 100;
+        cfg_row(M("Sharpness", "Nitidez", "Резкость"), x);
+        if (ImGui::SliderFloat("##taa_s", &pct, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.taa_sharpness = pct / 100;
+    }
+    ImGui::EndDisabled();
+    ImGui::Checkbox(M("Per-object motion vectors", "Vetores de movimento por objeto", "Векторы движения объектов"), &g_settings.mv_objects);
+    ImGui::SameLine();
     ImGui::Checkbox(M("Show motion vectors (debug)", "Mostrar vetores de movimento (depuração)", "Векторы движения (отладка)"),
                     &g_settings.mv_debug);
     settings_clamp_color();
@@ -525,6 +551,8 @@ static void cfg_advanced(float scale, bool *close) {
         g_settings.gi_intensity = 2.0f, g_settings.gi_radius = 300.0f, g_settings.gi_thickness = 25.0f;
         g_settings.gi_rays = 4, g_settings.gi_steps = 8, g_settings.gi_div = 2, g_settings.gi_temporal = true;
         g_settings.ssao_debug = g_settings.gi_debug = g_settings.mv_debug = false;
+        g_settings.taa_sharpness = 0.5f, g_settings.mv_objects = true;
+        g_settings.brightness = g_settings.contrast = g_settings.saturation = 1.0f;
     }
     ImGui::SameLine();
     *close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0));
@@ -533,9 +561,13 @@ static void cfg_advanced(float scale, bool *close) {
 static void cfg_draw(ImGuiIO &io, float scale) {
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 70));
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(fminf(io.DisplaySize.x * 0.9f, 900 * scale), 0), ImGuiCond_Always);
+    float ww = fminf(io.DisplaySize.x * 0.9f, 900 * scale);
+    ImGui::SetNextWindowSize(ImVec2(ww, 0), ImGuiCond_Always);
+    // (taller than the screen - the advanced page at 720p: it scrolls, and keyboard / pad navigation follows the focus)
+    ImGui::SetNextWindowSizeConstraints(ImVec2(ww, 0), ImVec2(ww, io.DisplaySize.y * 0.92f));
     // (one window per page: a page appearing gets its default focus)
-    ImGui::Begin(g_cfg_page ? "##cfg_adv" : "##cfg", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::Begin(g_cfg_page ? "##cfg_adv" : "##cfg", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                                                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
     // (fixed width, height fitted: the sliders fill the line, which an auto-resized window cannot have)
     ImGui::PushFont(g_mlang == 2 ? g_font : g_menu_font);
     ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", g_cfg_page ? M("Advanced settings", "Configurações avançadas", "Дополнительно")
@@ -545,23 +577,15 @@ static void cfg_draw(ImGuiIO &io, float scale) {
     if (g_cfg_page) {
         cfg_advanced(scale, &close);
     } else {
-        struct Row { const char *label; float *v, lo, hi; } rows[] = {
-            {M("Volume", "Volume", "Громкость"), &g_settings.volume, 0.0f, 2.0f},
-            {M("Brightness", "Brilho", "Яркость"), &g_settings.brightness, 0.5f, 1.5f},
-            {M("Contrast", "Contraste", "Контраст"), &g_settings.contrast, 0.5f, 1.5f},
-            {M("Saturation", "Saturação", "Насыщенность"), &g_settings.saturation, 0.0f, 2.0f},
-        };
-        const char *labels[] = {rows[0].label, rows[1].label, rows[2].label, rows[3].label,
-                                M("Shadow filter", "Filtro das sombras", "Фильтр теней")};
+        const char *labels[] = {M("Volume", "Volume", "Громкость"), M("Shadow filter", "Filtro das sombras", "Фильтр теней"),
+                                M("Anti-aliasing", "Antisserrilhado", "Сглаживание"), M("Upscaler", "Escalonador", "Масштабирование"),
+                                M("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1")};
         float x = cfg_label_x(labels, 5);
-        for (int i = 0; i < 4; i++) {
-            const Row &r = rows[i];
-            float pct = *r.v * 100;
-            cfg_row(r.label, x);
-            ImGui::PushID(i);
-            if (ImGui::SliderFloat("##v", &pct, r.lo * 100, r.hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *r.v = pct / 100;
-            ImGui::PopID();
-            if (!i) ImGui::SetItemDefaultFocus();  // (d-pad / arrows pick a row; A / Enter, then left-right, changes it)
+        {
+            float pct = g_settings.volume * 100;
+            cfg_row(labels[0], x);
+            if (ImGui::SliderFloat("##vol", &pct, 0, 200, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.volume = pct / 100;
+            ImGui::SetItemDefaultFocus();  // (d-pad / arrows pick a row; A / Enter, then left-right, changes it)
         }
         ImGui::Separator();
         // the effects on / off here, their parameters on the advanced page
@@ -571,15 +595,37 @@ static void cfg_draw(ImGuiIO &io, float scale) {
         // the shadow map's filter (runtime/nvn/vulkan/textures.c vk_sampler, runtime/nvn/maxwell/translate.c shpcf)
         const char *names[] = {M("Game's", "Do jogo", "Как в игре"), M("Bilinear", "Bilinear", "Билинейный"),
                                M("Smooth", "Suave", "Мягкий")};
-        cfg_row(labels[4], x);
+        cfg_row(labels[1], x);
         ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, names, 3);
+        // anti-aliasing: SMAA on the final image (the interface too), or TAA on the scene (jittered, motion vectors:
+        // runtime/nvn/vulkan/exec.c taa_run)
+        const char *aa[] = {M("Off", "Desligado", "Выкл."), "SMAA", "TAA"};
+        cfg_row(labels[2], x);
+        ImGui::BeginDisabled(g_settings.upscaler == UPSCALE_FSR3);  // (FSR 3.1 anti-aliases on its own)
+        ImGui::Combo("##aa", &g_settings.antialias, aa, 3);
+        ImGui::EndDisabled();
+        // the upscaler (a render resolution below the window's: the start screen): bilinear, FSR 1, or FSR 3.1 (temporal:
+        // jittered scene, motion vectors, the interface masked; it anti-aliases, TAA steps aside - exec.c, fsr3.cpp)
+        const char *up[] = {M("Bilinear", "Bilinear", "Билинейный"), "FSR 1", "FSR 3.1"};
+        int u = g_settings.upscaler == UPSCALE_FSR3 ? 2 : g_settings.upscaler == UPSCALE_FSR1 ? 1 : 0;
+        cfg_row(labels[3], x);
+        if (ImGui::Combo("##up", &u, up, 3)) g_settings.upscaler = u == 2 ? UPSCALE_FSR3 : u == 1 ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
+        // FSR 3.1's presets: the render resolution is the window's divided by the ratio (runtime/nvn/output_scale.c)
+        if (g_settings.upscaler == UPSCALE_FSR3) {
+            const char *pr[] = {M("Native AA (1.0x)", "AA nativo (1,0x)", "Нативное AA (1,0x)"),
+                                M("Quality (1.5x)", "Qualidade (1,5x)", "Качество (1,5x)"),
+                                M("Balanced (1.7x)", "Equilibrado (1,7x)", "Баланс (1,7x)"),
+                                M("Performance (2.0x)", "Desempenho (2,0x)", "Производительность (2,0x)"),
+                                M("Ultra Performance (3.0x)", "Ultra desempenho (3,0x)", "Макс. производительность (3,0x)")};
+            cfg_row(labels[4], x);
+            ImGui::Combo("##fsr3p", &g_settings.fsr3_preset, pr, 5);
+        }
         settings_clamp_color();
         ImGui::Spacing();
         float bw = 240 * scale;
         if (ImGui::Button(M("Advanced...", "Avançado...", "Дополнительно..."), ImVec2(bw, 0))) g_cfg_page = 1;
         ImGui::SameLine();
-        if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0)))
-            g_settings.volume = g_settings.brightness = g_settings.contrast = g_settings.saturation = 1.0f;
+        if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0))) g_settings.volume = 1.0f;
         ImGui::SameLine();
         close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
     }

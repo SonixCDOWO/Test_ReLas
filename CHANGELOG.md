@@ -1,5 +1,74 @@
 # Changelog
 
+## Unreleased
+
+- **In-game settings on F12**: volume, brightness, contrast and saturation, applied live and saved to `larecomp.ini`
+  (`brightness`, `contrast`, `saturation`). From a controller: − and + together, then *Settings*.
+  `LARECOMP_MENU_KEY=<key name>` picks another key (Steam takes F12 for screenshots). The colour pass runs on the
+  whole image, the game's interface included, and only when a value is not 100%.
+- **Smoother shadows** (F12, *Shadow filter*): the game samples its 2048² shadow map with nearest filtering, so each
+  of its 11 taps is a hard in / out and shadow edges come out stair-stepped. *Bilinear* makes each tap a 2x2
+  depth-compare filter; *Smooth* (the default) a 3x3 tent of four bilinear taps; *Game's* keeps the original. Same
+  shadow-map resolution. Measured at 1280x720 on an RTX 5070 Ti: the scene pass from 0.16 to 0.62 ms (*Smooth*).
+  `shadow_filter = game | bilinear | smooth` in `larecomp.ini`.
+- **Camera motion vectors** (groundwork for temporal effects): the game's view and projection are read from its scene
+  constant block each frame; between the scene's opaque and blended draws each pixel's depth is taken to the previous
+  frame (previous view-projection x inverse of this one, in double) into an RG16F image. Static scenery only: the
+  characters get the camera's motion, not their own. F12 *Show motion vectors (debug)*; checked with
+  `tools/mv_check.py` (reprojecting the previous frame cuts the error by 80-90% while walking).
+- **F12 menu**: brightness, contrast and saturation moved to *Advanced...* (an *Image* section); the first page keeps the
+  volume, the effects' switches, the shadow filter, anti-aliasing and the upscaler. With **FSR 3.1** chosen, its mode
+  sets the render resolution - AMD's presets: Native AA (1.0x, FSR as anti-aliasing), Quality (1.5x, the default),
+  Balanced (1.7x), Performance (2.0x), Ultra Performance (3.0x) - instead of the start screen's resolution
+  (`fsr3_preset = native | quality | balanced | performance | ultra`); TAA's sharpness slider also sets FSR 3.1's. A
+  page taller than the screen (the advanced one at 720p) scrolls. The start screen's box is just "Anti-aliasing" (SMAA
+  when on, unless TAA was chosen in F12).
+- **Per-object motion vectors** (F12 *Advanced...*, on by default whenever motion vectors are used): the scene pass's
+  depth-tested draws run a variant of the game's vertex shader that also computes the previous frame's position from
+  that draw's previous constant buffers (the shader body emitted twice by the translator, `cb<k>` read as `pcb<k>`),
+  and their fragment shaders write the velocity to an extra RG16F-class target. A draw is matched to the previous
+  frame's by program, vertex buffer, draw parameters, game object and occurrence; a draw missing any previous block, or
+  whose block jumps (another object paired, a cut), marks its velocity unknown and the camera's is used there.
+  Measured walking (`tools/mv_check.py`, `MV_BOX` on the player): reprojection error on the player 22-24 -> 12
+  (camera-only vectors moved the player like the background); whole image 1.87 -> 1.67.
+- **TAA** (F12, *Anti-aliasing*: Off / SMAA / TAA; sharpness under *Advanced...*): the scene's draws on its depth are
+  jittered (Halton 2, 3 in the vertex shader, after the position the velocity uses), the complete HDR scene is resolved
+  just before the game's bloom (Catmull-Rom history, YCoCg variance clipping, the nearest velocity of the 3x3,
+  depth-checked disocclusion, tone-mapped blending), RCAS at the present. The interface is not touched (SMAA blurred
+  it). Frame-to-frame instability walking 10-17% lower than without; no trail behind the player.
+- **FSR 3.1** (F12, *Upscaler*: Bilinear / FSR 1 / FSR 3.1), when the render resolution is below the window's: AMD
+  FidelityFX SDK 1.1.4 through its C API and AMD's signed `amd_fidelityfx_vk.dll` (MIT; shipped next to the exe,
+  loaded at run time - without it, FSR 1). The newest FSR with a Vulkan backend: the FSR SDK 2.x (FSR 4) is DirectX 12
+  only. The scene is jittered with FSR's own sequence; FSR gets the game image, the scene depth, the motion vectors
+  (camera + per object) and a mask of the interface (the pixels that changed after the frame's first interface draw).
+  From 640x360 to 1280x720 it is visibly cleaner than FSR 1 (difference to native 5.14 vs 5.40). The backend asks for
+  debug-utils and AMD marker functions this device lacks: they get no-ops; `...KHR` names fall back to Vulkan 1.1 core.
+  Not yet checked: the interface mask over a moving scene (battles).
+- **Indirect light (GI)**, experimental, off by default (F12 *Indirect light (GI)*; its parameters under *Advanced...*):
+  one bounce of the visible light in screen space, after the design of FastGI (a Unity URP feature; the technique,
+  rewritten for this renderer - no code taken from it). Between the scene's opaque and blended draws: normals rebuilt
+  from the depth (the game has no normal buffer), rays traced at half / a third / a quarter of the resolution against
+  the depth with the game's own projection (cosine-distributed, quadratic steps, the first crossing refined by
+  bisection and validated: on the ray, facing it and the camera), the scene's colour where they hit (luminance
+  clamped), two bilateral blurs, accumulation along the camera motion vectors (depth-validated, neighbourhood-clamped),
+  an edge-aware upsample added onto the scene. Grass greens the curbs, fences and the foot of walls, the red roofs
+  their eaves. Defaults: intensity 200%, radius 300, thickness 25 (the game's units are ~cm), 4 rays x 8 steps, half
+  resolution. Measured at 1280x720 on an RTX 5070 Ti: +0.36 ms. Walking, the accumulated light has no trail behind the
+  player (brighter / darker differences against single-frame GI symmetric) and much less grain.
+- **F12 menu split**: the effects are switched on the first page (SSAO, GI, the shadow filter); their sliders and the
+  debug views moved to *Advanced...*. SSAO defaults are now intensity 200%, radius 100.
+- **SSAO accumulated over frames** (F12 *Accumulate over frames*, on by default with SSAO): the sample spiral turns
+  every frame and the result is blended with the previous one fetched along the camera motion vectors (90% history),
+  rejected where the stored distance is not the one the pixel had (uncovered ground, characters moving on their own)
+  and clamped to the current 3x3 range. Checked walking and stopping against single-frame SSAO
+  (`tools/ssao_temporal_check.py`): a first version with a 2% clamp margin left the player's contact shadow as a trail
+  that never faded (2-4% of pixels darker); with the exact clamp the differences are symmetric noise (~1% darker, ~1%
+  lighter) and nothing remains after stopping; high-frequency noise down 8-10%.
+- The F12 debug views (the occlusion alone, the motion vectors) are shown at the present, in place of the game image:
+  written into the scene they came out white or washed out by the game's fog, bloom and tone mapping.
+- **Ambient occlusion (SSAO)**, experimental and off by default (F12: on / off, intensity, radius, a view of the
+  occlusion alone): computed from the game's depth between its opaque and blended draws, with the game's own projection.
+
 ## 0.3.2 (2026-10-18)
 
 - **Fixes the launcher forgetting your settings** (0.3.1): it saved `larecomp.ini` with some lines run together, so

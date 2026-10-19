@@ -46,6 +46,12 @@ for n in frames:
             continue
         m = np.ones((h, w), bool)
         m[:20] = m[-20:] = False; m[:, :20] = m[:, -20:] = False  # (edges: pixels coming from outside)
+        box = os.environ.get('MV_BOX')  # MV_BOX=x0,y0,x1,y1: only that region (e.g. the player, whom the camera follows)
+        if box:
+            x0, y0, x1, y1 = (int(t) for t in box.split(','))
+            mb = np.zeros((h, w), bool)
+            mb[y0:y1, x0:x1] = True
+            m &= mb
         base = np.abs(cur - prev).mean(axis=2)[m].mean()
         out = []
         for sy in (1, -1):

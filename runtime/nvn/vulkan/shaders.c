@@ -754,6 +754,104 @@ static const char *builtin_src(const char *name, int *stage) {
         }
         return src[k];
     }
+    // TAA (exec.c taa_run), on the game's HDR scene before its bloom: t = this frame (jittered), h = the history (rgb,
+    // a = its distance), mv = the motion vectors (xy velocity, z previous / current distance), dep = depth.
+    // a = the projection (P00, P11, A, B), b = (reset, history weight, depth mode, 0). Blended in a tone-mapped space
+    // (c / (1 + max c): no fireflies from the bright highlights); the velocity of the nearest of the 3x3 (edges keep the
+    // foreground's); the history by Catmull-Rom, clipped to the 3x3's YCoCg mean +- 1.25 sigma (variance clipping),
+    // dropped where its distance is not the one expected (uncovered). Out: rgb, a = this distance.
+    if (!strcmp(name, "taa.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D h;\n"
+               "layout(set = 0, binding = 2) uniform sampler2D mv;\n"
+               "layout(set = 0, binding = 3) uniform sampler2D dep;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "float lin(float d) { return pc.a.w / ((pc.b.z > 0.5 ? d * 2.0 - 1.0 : d) + pc.a.z); }\n"
+               "vec3 tm(vec3 c) { return c / (1.0 + max(c.r, max(c.g, c.b))); }\n"
+               "vec3 itm(vec3 c) { return c / max(1.0 - max(c.r, max(c.g, c.b)), 1e-4); }\n"
+               "vec3 ycc(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }\n"
+               "vec3 rgb(vec3 y) { return vec3(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z); }\n"
+               "vec3 cat(vec2 uv, vec2 sz) {\n"  // Catmull-Rom, 5 bilinear taps (the corners dropped)
+               "  vec2 sp = uv * sz, tp = floor(sp - 0.5) + 0.5, f = sp - tp;\n"
+               "  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+               "  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);\n"
+               "  vec2 w12 = w1 + w2, t0 = (tp - 1.0) / sz, t3 = (tp + 2.0) / sz, t12 = (tp + w2 / w12) / sz;\n"
+               "  vec3 r = texture(h, vec2(t12.x, t0.y)).rgb * (w12.x * w0.y) + texture(h, vec2(t0.x, t12.y)).rgb * (w0.x * w12.y)\n"
+               "         + texture(h, t12).rgb * (w12.x * w12.y) + texture(h, vec2(t3.x, t12.y)).rgb * (w3.x * w12.y)\n"
+               "         + texture(h, vec2(t12.x, t3.y)).rgb * (w12.x * w3.y);\n"
+               "  float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;\n"
+               "  return max(r / ws, vec3(0.0));\n"
+               "}\n"
+               "void main() {\n"
+               "  ivec2 sz = textureSize(t, 0), p = ivec2(gl_FragCoord.xy);\n"
+               "  ivec2 dsz = textureSize(dep, 0);\n"
+               "  vec3 c = max(texelFetch(t, p, 0).rgb, vec3(0.0));\n"
+               "  vec2 dsc = vec2(dsz) / vec2(sz);\n"
+               "  float l = lin(texelFetch(dep, min(ivec2(vec2(p) * dsc), dsz - 1), 0).r);\n"
+               "  if (pc.b.x > 0.5) { o = vec4(c, l); return; }\n"
+               "  vec3 m1 = vec3(0.0), m2 = vec3(0.0);\n"
+               "  float dn = 1.0;\n"
+               "  ivec2 np = p;\n"
+               "  for (int y = -1; y <= 1; y++)\n"
+               "    for (int x = -1; x <= 1; x++) {\n"
+               "      ivec2 q = clamp(p + ivec2(x, y), ivec2(0), sz - 1);\n"
+               "      vec3 s = ycc(tm(max(texelFetch(t, q, 0).rgb, vec3(0.0))));\n"
+               "      m1 += s; m2 += s * s;\n"
+               "      float d = texelFetch(dep, min(ivec2(vec2(q) * dsc), dsz - 1), 0).r;\n"
+               "      if (d < dn) { dn = d; np = q; }\n"
+               "    }\n"
+               "  m1 /= 9.0;\n"
+               "  vec3 sg = sqrt(max(m2 / 9.0 - m1 * m1, vec3(0.0)));\n"
+               "  vec4 v = texelFetch(mv, min(ivec2(vec2(np) * vec2(textureSize(mv, 0)) / vec2(sz)), textureSize(mv, 0) - 1), 0);\n"
+               "  vec2 uv = (vec2(p) + 0.5) / vec2(sz), pu = uv - v.xy;\n"
+               "  if (any(lessThan(pu, vec2(0.0))) || any(greaterThan(pu, vec2(1.0)))) { o = vec4(c, l); return; }\n"
+               "  float lh = texelFetch(h, clamp(ivec2(pu * vec2(sz)), ivec2(0), sz - 1), 0).a, le = v.z * l;\n"
+               "  float keep = clamp(1.0 - (abs(lh - le) / max(le * 0.02, 2.0) - 1.0), 0.0, 1.0);\n"
+               "  vec3 hy = ycc(tm(cat(pu, vec2(sz))));\n"
+               "  vec3 lo = m1 - 1.25 * sg, hi = m1 + 1.25 * sg, ce = 0.5 * (hi + lo), ex = 0.5 * (hi - lo) + 1e-4;\n"
+               "  vec3 dv = (hy - ce) / ex;\n"
+               "  float mx = max(abs(dv.x), max(abs(dv.y), abs(dv.z)));\n"
+               "  if (mx > 1.0) hy = ce + (hy - ce) / mx;\n"
+               "  vec3 cy = ycc(tm(c));\n"
+               "  float w = pc.b.y * keep;\n"
+               "  o = vec4(itm(rgb(mix(cy, hy, w))), l);\n"
+               "}\n";
+    }
+    // FSR 3's mask of the interface (exec.c post_process): the pixels the interface drew over the composited scene
+    // (t0 the final image, t1 its copy before the first interface draw) - 1 there: FSR takes them as they are
+    if (!strcmp(name, "ui_mask.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t0;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D t1;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+               "  vec3 d = abs(texelFetch(t0, p, 0).rgb - texelFetch(t1, min(p, textureSize(t1, 0) - 1), 0).rgb);\n"
+               "  o = vec4(max(d.r, max(d.g, d.b)) > 2.0 / 255.0 ? 1.0 : 0.0);\n"
+               "}\n";
+    }
+    // The scene depth as R32F (FSR 3 reads a colour image: exec.c post_process)
+    if (!strcmp(name, "depth_r32.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() { o = vec4(texelFetch(dep, ivec2(gl_FragCoord.xy), 0).r); }\n";
+    }
+    // A post image back into a target (b.xy = 1 / the output's size; sampled, the sizes may differ): TAA's result into
+    // the game's scene
+    if (!strcmp(name, "copy.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() { o = vec4(texture(t, gl_FragCoord.xy * pc.b.xy).rgb, 1.0); }\n";
+    }
     // Camera motion vectors (exec.c scene_hook_run): each pixel's position, rebuilt from its depth, taken to the
     // previous frame by m = previous view-projection x inverse of this one (the game's matrices, GL style: NDC y up).
     // a.x = 1: depth stored as (z_ndc + 1) / 2; a.y = the sign of NDC y at the bottom of the image (+1: row 0 is NDC
@@ -764,10 +862,13 @@ static const char *builtin_src(const char *name, int *stage) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
                "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D obj;\n"  // (exec.c: per-object velocities, w = 1 written)
                "layout(push_constant) uniform P { mat4 m; vec4 a; } pc;\n"
                "layout(location = 0) out vec4 o;\n"
                "void main() {\n"
                "  ivec2 sz = textureSize(dep, 0), p = ivec2(gl_FragCoord.xy);\n"
+               "  vec4 ov = texelFetch(obj, min(p, textureSize(obj, 0) - 1), 0);\n"
+               "  if (ov.w > 0.5) { o = vec4(ov.xyz, 1.0); return; }\n"
                "  float d = texelFetch(dep, p, 0).r;\n"
                "  vec2 uv = (vec2(p) + 0.5) / vec2(sz);\n"
                "  vec2 n = uv * 2.0 - 1.0;\n"

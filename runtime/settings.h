@@ -4,9 +4,14 @@
 
 enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12 };
 // (11 was 67% of the display: larecomp.ini "67%" now loads as RES_Q75)
-enum { UPSCALE_BILINEAR = 0, UPSCALE_FSR1 = 2 /* AMD FSR 1 */ };
+// FSR 3.1: temporal (AMD FidelityFX, runtime/nvn/vulkan/fsr3.c), FSR 1 when its DLL is missing
+enum { UPSCALE_BILINEAR = 0, UPSCALE_FSR1 = 2 /* AMD FSR 1 */, UPSCALE_FSR3 = 3 };
+// FSR 3.1's presets (AMD's ratios, each axis): the render resolution is the window's divided by it
+enum { FSR3_NATIVE_AA = 0, FSR3_QUALITY = 1, FSR3_BALANCED = 2, FSR3_PERFORMANCE = 3, FSR3_ULTRA_PERFORMANCE = 4 };
+float settings_fsr3_ratio(void);  // 1.0, 1.5, 1.7, 2.0, 3.0
 #define UPSCALE_SHARP UPSCALE_FSR1  // the non-bilinear upscaler (the default)
-enum { AA_OFF = 0, AA_SMAA = 1 };
+// TAA: temporal, on the game's HDR scene before its bloom (runtime/nvn/vulkan/exec.c taa_run), jittered draws
+enum { AA_OFF = 0, AA_SMAA = 1, AA_TAA = 2 };
 enum { VREAD_AUTO = 0, VREAD_COPY = 1, VREAD_DIRECT = 2 };
 // the game's (each of its taps a hard in / out), each tap bilinear (2x2 PCF), each tap a 3x3 tent (4 bilinear lookups)
 enum { SHADOW_GAME = 0, SHADOW_BILINEAR = 1, SHADOW_SMOOTH = 2 };
@@ -28,6 +33,9 @@ typedef struct {
     bool ssao_temporal;   // accumulated over frames along the camera motion vectors (exec.c ssao_run)
     bool ssao_debug;      // (not saved) the scene shows the occlusion alone
     bool mv_debug;        // (not saved) the scene shows its camera motion vectors (runtime/nvn/vulkan/exec.c scene_hook)
+    bool mv_objects;      // per-object motion vectors (characters' own motion) when motion vectors are in use (default on)
+    float taa_sharpness;  // TAA: RCAS sharpening at the present, 0..1 (default 0.5)
+    int fsr3_preset;      // FSR3_*: with the FSR 3.1 upscaler, the render resolution (default FSR3_QUALITY)
     int shadow_filter;    // SHADOW_*: how the shadow map is filtered (F12 menu; textures.c vk_sampler, translate.c shpcf)
     // screen-space indirect light, one bounce (F12 menu / advanced; runtime/nvn/vulkan/exec.c gi_run). World units ~cm
     bool gi;
