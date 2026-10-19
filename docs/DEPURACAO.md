@@ -12,6 +12,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_NO_AUDIO=1` | sem áudio (testes automáticos) |
 | `LARECOMP_FONT=<arquivo>` | fonte do sistema entregue ao jogo no lugar da lista padrão (`runtime/hle/pl.c`; a Yu Gothic Regular de alguns Win10 derruba o motor de fontes, issue #1) |
 | `LARECOMP_LANG=en\|pt\|ru` | idioma do menu sobreposto (fechar o jogo, teclado do nome); sem ela, o idioma do sistema |
+| `LARECOMP_MENU_KEY=<tecla>` | outra tecla para o menu de configurações (padrão `F12`; nome de scancode do SDL: `F10`, `Insert`...) |
 | `LARECOMP_SWKBD_UTF8=1` | teclado devolve UTF-8 em vez de UTF-16 |
 | `LARECOMP_GYRO_TEST=x\|y\|z` | giroscópio virtual oscilando ±15° no eixo dado (`z+` / `x-`...: giro de 10° em rampa 1 s depois do início da mira); loga quando o jogo lê o sensor. Para chegar a uma captura: andar pela grama (`STICK_*`) e apertar A no "Get ready"; o encontro é sorteado, repita até o log ter `sensor started` |
 | `mod` / `game_lang` (larecomp.ini) | mod ativo (`mods/<nome>/`, o log mostra `[mods]` e quantos arquivos do romfs foram trocados) / idioma pedido ao sistema (`en-US`, `es`...; um save existente mantém o seu) |
@@ -67,6 +68,16 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | Variável | Efeito |
 |---|---|
 | `LARECOMP_SHOT_AT=<frame>,...` | salva o quadro do jogo em `build/frames/frame_N.png` |
+| `LARECOMP_MV_DUMP=<frame>,...` | salva os vetores de movimento da câmera daquele quadro em `build/frames/mv_N.png` (RGBA8: 0,5 + 32 × velocidade em uv; a imagem sai invertida em y como os `frame_N.png`). `tools/mv_check.py build/frames N` confere: reprojeta o quadro anterior com eles e compara o erro |
+| `LARECOMP_SSAO_DUMP=<frame>,...` | salva a oclusão (SSAO) como aplicada naquele quadro, depois do blur e do histórico, em `build/frames/ao_N.png`. `tools/ssao_temporal_check.py <sem> <com>` compara duas execuções com a mesma entrada (acumulação desligada / ligada): fantasma (temporal mais escuro > 2%) e ruído; `tools/ssao_temporal_sheet.py` monta recortes ampliados com a diferença |
+| `LARECOMP_GI_DEBUG_EXPOSURE=<x>` | exposição da vista "só a luz indireta" (GI) do menu avançado; padrão 16 (a cena HDR do jogo é escura antes da exposição dele) |
+| `LARECOMP_MVO_PROBE=<frame>` | registra, para cada draw com vetores por objeto daquele quadro, os blocos de constantes do quadro anterior: idênticos, faltando (`MISSING`) ou rejeitados por salto (`REJECTED`, com a palavra e os valores) |
+| `LARECOMP_FSR3_MASK_DUMP=<frame>` | salva a máscara da interface que o FSR 3.1 recebe naquele quadro em `build/frames/uimask_N.png` |
+| `LARECOMP_UI2X_GENERATE=1` | a tela inicial gera as imagens da interface em 2x (`runtime/ui2x.c`, como o botão) e sai: status 0 se terminou; o passo a passo vai para o log (`[ui2x]`) |
+| `LARECOMP_TEXKEY_LOG=1` | registra a chave de conteúdo de cada textura enviada da CPU (`[texkey] <chave de 64 bits> <w>x<h> nvn <formato> ...`: CRC-32 e Adler-32 do nível 0 desentrelaçado, `ui2x_key`, a mesma de `cache/ui2x.pak`). `tools/ui_texkeys.py <romfs.bin> <saída.tsv> [<log>]` calcula a mesma chave para todas as texturas da interface nos arquivos do jogo e diz quais do log batem |
+| `LARECOMP_FONT_SCALE=<1..4>` | força a escala do texto (`runtime/hle/font_hires.c`) em vez da automática pela altura da janela; `1` desliga (para comparar) |
+| `LARECOMP_FONT_LOG=1` | registra os primeiros 400 glifos que o cache de fonte do jogo desenha (código, tamanho, métricas em 1x e em Nx, célula e linha) e o tamanho das texturas de cache em Nx (`runtime/hle/font_hires.c`) |
+| `LARECOMP_MV_YSIGN=-1` | (validação) inverte a convenção de y NDC dos vetores de movimento; o certo no Let's Go é o padrão (+1) |
 | Estatística a cada 2 s (`[vk] t=...`) | draws, passes, dispatches, uploads, `compile N (translate, spirv, pipelines, draws waited)` (programas e pipelines prontos, o tempo de CPU de cada etapa e quanto os draws esperaram por eles). Para medir uma primeira visita, renomeie `cache/` antes do teste e devolva depois e `[skip: ...]` com os draws pulados por motivo |
 | `tools/perf_summary.py [log]` | resumo de uma sessão: faixa de fps, quadros acima de 50 ms, draws pulados, compilações, underruns de áudio (padrão: `logs/jogo.log`) |
 | `LARECOMP_FRAMETIME_CSV=<arquivo>` | grava `present,dt_ms` para cada present do jogo (exceto o primeiro), com tempo monotônico; quadro intermediário extra do menu a 60 não conta. Usar um caminho em `build/` |
@@ -133,7 +144,7 @@ Não ligue debug info nos shaders para capturar: com milhares de shaders, o repl
 - **Ganchos** (runtime/fnhook.c): toda função gerada passa por `FN_ENTER`, que chama `rt_fnhook` enquanto houver
   gancho registrado (`rt_register_fnhook(addr, fn)`; `fn` devolve 1 para tratar a chamada no lugar do jogo;
   `rt_call_original` roda a função original de dentro do gancho). Mudar comportamento não exige gerar a DLL de novo.
-- `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n>`): varre a memória mapeada do guest por esses bytes
+- `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n>`; `LARECOMP_SCAN_LEN=<bytes>` loga mais que 0x40 bytes por acerto, `LARECOMP_SCAN_NOPTR=1` pula a busca de ponteiros, que é lenta): varre a memória mapeada do guest por esses bytes
   (ex.: o hash de um registro em little-endian) quando o jogo chega ao frame (padrão 1300) e loga cada acerto, os 0x40
   bytes seguintes, `n` registros de 0x40 antes e os ponteiros para a base (runtime/hle/memscan.c, só Windows).
 - `LARECOMP_HOOK_DUMP="<addr>:<args>[;...]"` (endereço completo do guest, ex.: `700028ef70`; o offset do `main`

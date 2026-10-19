@@ -20,6 +20,27 @@ Settings g_settings = {
     .fullscreen = false,
     .fps = 30,
     .volume = 1.0f,
+    .brightness = 1.0f,
+    .contrast = 1.0f,
+    .saturation = 1.0f,
+    .ssao = false,
+    .ssao_intensity = 2.0f,
+    .ssao_radius = 100.0f,
+    .ssao_temporal = true,
+    .shadow_filter = SHADOW_SMOOTH,
+    .ui2x = true,
+    .blur_quality = true,
+    .mv_objects = true,
+    .taa_sharpness = 0.5f,
+    .fsr3_preset = FSR3_QUALITY,
+    .gi = false,
+    .gi_intensity = 2.0f,
+    .gi_radius = 300.0f,
+    .gi_thickness = 25.0f,
+    .gi_rays = 4,
+    .gi_steps = 8,
+    .gi_div = 2,
+    .gi_temporal = true,
     .mouse_sens = 0.1f,
     .stick_deadzone = 0.15f,
     .reverb = true,
@@ -47,6 +68,29 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "fps")) g_settings.fps = atoi(val) == 60 ? 60 : 30;
     else if (!strcmp(key, "render_height")) g_settings.res_height = atoi(val) >= 360 && atoi(val) <= 4320 ? atoi(val) : 0;
     else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
+    else if (!strcmp(key, "brightness")) g_settings.brightness = (float)atof(val);
+    else if (!strcmp(key, "contrast")) g_settings.contrast = (float)atof(val);
+    else if (!strcmp(key, "saturation")) g_settings.saturation = (float)atof(val);
+    else if (!strcmp(key, "ssao")) g_settings.ssao = atoi(val) != 0;
+    else if (!strcmp(key, "ssao_intensity")) g_settings.ssao_intensity = (float)atof(val);
+    else if (!strcmp(key, "ssao_radius")) g_settings.ssao_radius = (float)atof(val);
+    else if (!strcmp(key, "ssao_temporal")) g_settings.ssao_temporal = atoi(val) != 0;
+    else if (!strcmp(key, "mv_objects")) g_settings.mv_objects = atoi(val) != 0;
+    else if (!strcmp(key, "gi")) g_settings.gi = atoi(val) != 0;
+    else if (!strcmp(key, "gi_intensity")) g_settings.gi_intensity = (float)atof(val);
+    else if (!strcmp(key, "gi_radius")) g_settings.gi_radius = (float)atof(val);
+    else if (!strcmp(key, "gi_thickness")) g_settings.gi_thickness = (float)atof(val);
+    else if (!strcmp(key, "gi_rays")) g_settings.gi_rays = atoi(val);
+    else if (!strcmp(key, "gi_steps")) g_settings.gi_steps = atoi(val);
+    else if (!strcmp(key, "gi_resolution")) g_settings.gi_div = atoi(val);
+    else if (!strcmp(key, "gi_temporal")) g_settings.gi_temporal = atoi(val) != 0;
+    else if (!strcmp(key, "gi_debug")) g_settings.gi_debug = atoi(val) != 0;  // (by hand / tests: never saved)
+    else if (!strcmp(key, "ui2x")) g_settings.ui2x = atoi(val) != 0;
+    else if (!strcmp(key, "blur_quality")) g_settings.blur_quality = atoi(val) != 0;
+    else if (!strcmp(key, "shadow_filter"))
+        g_settings.shadow_filter = !strcmp(val, "game") ? SHADOW_GAME : !strcmp(val, "bilinear") ? SHADOW_BILINEAR : SHADOW_SMOOTH;
+    else if (!strcmp(key, "ssao_debug")) g_settings.ssao_debug = atoi(val) != 0;  // (by hand / tests: never saved)
+    else if (!strcmp(key, "mv_debug")) g_settings.mv_debug = atoi(val) != 0;      // (the same)
     else if (!strcmp(key, "mouse_sens")) g_settings.mouse_sens = (float)atof(val);
     else if (!strcmp(key, "stick_deadzone")) g_settings.stick_deadzone = (float)atof(val);
     else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
@@ -58,14 +102,43 @@ static void parse_line(const char *line) {
                               !strcmp(val, "50%") ? RES_Q50 : !strcmp(val, "25%") ? RES_Q25 :
                               (n >= 1 && n <= 4) ? n : n > 4 ? 4 : RES_MATCH;
     }
-    else if (!strcmp(key, "upscaler")) g_settings.upscaler = !strcmp(val, "bilinear") ? UPSCALE_BILINEAR : UPSCALE_SHARP;
+    else if (!strcmp(key, "upscaler"))
+        g_settings.upscaler = !strcmp(val, "bilinear") ? UPSCALE_BILINEAR : !strcmp(val, "fsr3") ? UPSCALE_FSR3 : UPSCALE_SHARP;
     // (an older "antialias = off" was only LAS Recomp's default being saved: a new key, so SMAA starts on)
     else if (!strcmp(key, "smaa")) g_settings.antialias = atoi(val) != 0 ? AA_SMAA : AA_OFF;
+    // (after "smaa" in the file: the choice among the three; "smaa" stays for older versions)
+    else if (!strcmp(key, "aa")) g_settings.antialias = !strcmp(val, "taa") ? AA_TAA : !strcmp(val, "smaa") ? AA_SMAA : AA_OFF;
+    else if (!strcmp(key, "taa_sharpness")) g_settings.taa_sharpness = (float)atof(val);
+    else if (!strcmp(key, "fsr3_preset"))
+        g_settings.fsr3_preset = !strcmp(val, "native") ? FSR3_NATIVE_AA : !strcmp(val, "balanced") ? FSR3_BALANCED :
+                                 !strcmp(val, "performance") ? FSR3_PERFORMANCE : !strcmp(val, "ultra") ? FSR3_ULTRA_PERFORMANCE : FSR3_QUALITY;
     else if (!strcmp(key, "render_thread")) g_settings.render_thread = atoi(val) != 0;
     else if (!strcmp(key, "vertex_read")) g_settings.vertex_read = !strcmp(val, "direct") ? VREAD_DIRECT : !strcmp(val, "copy") ? VREAD_COPY : VREAD_AUTO;
     else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
     else if (!strcmp(key, "wild_battle")) g_settings.wild_battle = atoi(val) != 0;
     else bind_settings_load(key, val);  // bind_pad_* / bind_key_*: runtime/hle/bindings.c
+}
+
+float settings_fsr3_ratio(void) {
+    static const float r[] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f};
+    return r[g_settings.fsr3_preset >= 0 && g_settings.fsr3_preset <= 4 ? g_settings.fsr3_preset : 1];
+}
+
+static float clampf_(float v, float lo, float hi) { return v != v ? 1 : v < lo ? lo : v > hi ? hi : v; }
+void settings_clamp_color(void) {
+    g_settings.brightness = clampf_(g_settings.brightness, 0.5f, 1.5f);
+    g_settings.contrast = clampf_(g_settings.contrast, 0.5f, 1.5f);
+    g_settings.saturation = clampf_(g_settings.saturation, 0.0f, 2.0f);
+    g_settings.ssao_intensity = g_settings.ssao_intensity != g_settings.ssao_intensity ? 2 : clampf_(g_settings.ssao_intensity, 0.0f, 3.0f);
+    g_settings.ssao_radius = g_settings.ssao_radius != g_settings.ssao_radius ? 100 : clampf_(g_settings.ssao_radius, 10.0f, 400.0f);
+    if (g_settings.shadow_filter < SHADOW_GAME || g_settings.shadow_filter > SHADOW_SMOOTH) g_settings.shadow_filter = SHADOW_SMOOTH;
+    g_settings.gi_intensity = clampf_(g_settings.gi_intensity, 0.0f, 4.0f);
+    g_settings.taa_sharpness = g_settings.taa_sharpness != g_settings.taa_sharpness ? 0.5f : clampf_(g_settings.taa_sharpness, 0.0f, 1.0f);
+    g_settings.gi_radius = g_settings.gi_radius != g_settings.gi_radius ? 300 : clampf_(g_settings.gi_radius, 50.0f, 1000.0f);
+    g_settings.gi_thickness = g_settings.gi_thickness != g_settings.gi_thickness ? 25 : clampf_(g_settings.gi_thickness, 5.0f, 100.0f);
+    g_settings.gi_rays = g_settings.gi_rays < 1 ? 1 : g_settings.gi_rays > 8 ? 8 : g_settings.gi_rays;
+    g_settings.gi_steps = g_settings.gi_steps < 4 ? 4 : g_settings.gi_steps > 32 ? 32 : g_settings.gi_steps;
+    g_settings.gi_div = g_settings.gi_div < 2 ? 2 : g_settings.gi_div > 4 ? 4 : g_settings.gi_div;
 }
 
 void settings_load(void) {
@@ -94,6 +167,7 @@ void settings_load(void) {
     fclose(f);
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
+    settings_clamp_color();
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
 }
 
@@ -104,15 +178,39 @@ void settings_save(void) {
     fprintf(f, "fullscreen = %d\n", g_settings.fullscreen);
     fprintf(f, "fps = %d\n", g_settings.fps);
     fprintf(f, "render_height = %d\n", g_settings.res_height);
-    fprintf(f, "smaa = %d\n", g_settings.antialias == AA_SMAA);
+    fprintf(f, "smaa = %d\n", g_settings.antialias != AA_OFF);
+    fprintf(f, "aa = %s\n", g_settings.antialias == AA_TAA ? "taa" : g_settings.antialias == AA_SMAA ? "smaa" : "off");
+    fprintf(f, "taa_sharpness = %.2f\n", g_settings.taa_sharpness);
+    static const char *const presets[] = {"native", "quality", "balanced", "performance", "ultra"};
+    fprintf(f, "fsr3_preset = %s\n", presets[g_settings.fsr3_preset >= 0 && g_settings.fsr3_preset <= 4 ? g_settings.fsr3_preset : 1]);
     fprintf(f, "mod = %s\n", g_settings.mod);
     fprintf(f, "mouse_sens = %.3f\n", g_settings.mouse_sens);
     fprintf(f, "stick_deadzone = %.2f\n", g_settings.stick_deadzone);
     fprintf(f, "volume = %.2f\n", g_settings.volume);
+    fprintf(f, "brightness = %.2f\n", g_settings.brightness);
+    fprintf(f, "contrast = %.2f\n", g_settings.contrast);
+    fprintf(f, "saturation = %.2f\n", g_settings.saturation);
+    fprintf(f, "ssao = %d\n", g_settings.ssao);
+    fprintf(f, "ssao_intensity = %.2f\n", g_settings.ssao_intensity);
+    fprintf(f, "ssao_radius = %.0f\n", g_settings.ssao_radius);
+    fprintf(f, "ssao_temporal = %d\n", g_settings.ssao_temporal);
+    fprintf(f, "mv_objects = %d\n", g_settings.mv_objects);
+    fprintf(f, "gi = %d\n", g_settings.gi);
+    fprintf(f, "gi_intensity = %.2f\n", g_settings.gi_intensity);
+    fprintf(f, "gi_radius = %.0f\n", g_settings.gi_radius);
+    fprintf(f, "gi_thickness = %.0f\n", g_settings.gi_thickness);
+    fprintf(f, "gi_rays = %d\n", g_settings.gi_rays);
+    fprintf(f, "gi_steps = %d\n", g_settings.gi_steps);
+    fprintf(f, "gi_resolution = %d\n", g_settings.gi_div);
+    fprintf(f, "gi_temporal = %d\n", g_settings.gi_temporal);
+    fprintf(f, "ui2x = %d\n", g_settings.ui2x);
+    fprintf(f, "blur_quality = %d\n", g_settings.blur_quality);
+    fprintf(f, "shadow_filter = %s\n", g_settings.shadow_filter == SHADOW_GAME ? "game" :
+                                       g_settings.shadow_filter == SHADOW_BILINEAR ? "bilinear" : "smooth");
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
-    fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
+    fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_FSR3 ? "fsr3" : g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
     if (g_settings.res_mode == RES_DYNAMIC) fprintf(f, "resolution = dynamic\n");
     else if (g_settings.res_mode == RES_Q75) fprintf(f, "resolution = 75%%\n");
     else if (g_settings.res_mode == RES_Q25) fprintf(f, "resolution = 25%%\n");

@@ -18,6 +18,7 @@ build/
 reference/
 tools/bin/
 .venv/
+__pycache__/
 logs/
 
 # Gerados pelo runtime ao rodar (saves, caches de shader, configurações locais)

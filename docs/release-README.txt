@@ -56,7 +56,8 @@ jogo. O programa abre em portugues quando o Windows esta em portugues.
 Controls
 --------
 Keyboard: WASD walk, Space/Enter = A, Q/Backspace = B, Tab = X (menu), R = Y, Z/C = L/R, = and - = Plus/Minus,
-arrows = D-pad, Esc = close. All keys can be changed on the start screen.
+arrows = D-pad, Esc = close, F12 = settings (volume, image, effects; on a controller: - and + together, then Settings).
+All keys can be changed on the start screen.
 Mouse: aims Poke Balls (like the Switch's motion controls), left button throws; outside of aiming, the left button is
 a finger on the touch screen (Play with your partner). Right button = B.
 Controllers: any controller SDL recognizes (Xbox, PlayStation, Switch Pro...), handheld-mode layout. The right stick
@@ -75,5 +76,6 @@ Legal
 Fan project, not affiliated with Nintendo, The Pokemon Company, Game Freak or Creatures. MIT licensed (LICENSE.txt),
 based on LAS Recomp by Peiikai (LICENSE-LASRecomp.txt, https://github.com/peiikai/LASRecomp).
 Bundled: SDL3 (zlib), FFmpeg (LGPL 2.1, built with only the decoders the game needs; source: https://ffmpeg.org),
-shaderc (Apache 2.0), libiconv (LGPL), Zig (MIT), the Baloo 2 font (SIL OFL 1.1, Baloo2-OFL.txt), and the
+shaderc (Apache 2.0), libiconv (LGPL), Zig (MIT), the Baloo 2 font (SIL OFL 1.1, Baloo2-OFL.txt),
+AMD's FidelityFX SDK runtime for FSR 3.1 (MIT, amd_fidelityfx_vk.dll, FidelityFX-LICENSE.txt), and the
 GCC / MinGW-w64 runtime libraries (GPL with the runtime library exception).

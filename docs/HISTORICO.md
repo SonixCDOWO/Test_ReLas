@@ -277,3 +277,75 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   minutos o que três rodadas manuais não mostraram. (3) O `LARECOMP_HOOK_DUMP` exige o endereço completo do guest.
 - **Falta:** XP dividido (metade ao derrotar, metade ao capturar), natureza e shiny do Pokémon tocado, formas
   regionais (a tabela de golpes usa o índice da espécie), batalha de Pokémon grandes/auras e teste em mais áreas.
+
+## Texto em 2x com riscos verticais (19/10/2026, PR #13 do Vancete)
+- **Sintoma.** Com o cache de glifos em 2x (`runtime/hle/font_hires.c`, ligado sozinho a partir de 1080 linhas), o menu
+  "Continue your adventure" mostrava riscos claros e finos entre as letras; com `LARECOMP_FONT_SCALE=1` não havia nada.
+- **Diagnóstico.** Saturar a subtração do preenchimento (fontes com contorno) não mudou nada. Os riscos ficavam nas
+  bordas das células: a célula em Kx era escrita de `cx*K + 1` até `(cx+cw+2)*K - 1`, deixando a primeira e a última
+  coluna como estavam.
+- **Causa.** Quando o jogo reaproveita uma célula, essas colunas guardavam pedaços do glifo que estava ali antes. Em 1x
+  o jogo reescreve a célula inteira (as colunas vazias também).
+- **Correção.** A célula em Kx cobre exatamente K vezes a de 1x (`cl = cx*K`, `cr = (cx+cw+2)*K`). Conferido em tela
+  cheia 1080p (2x automático) no Eevee: sem riscos.
+
+## Interface 2x com ícones em lixo no Pikachu (19/10/2026)
+- **Sintoma.** Teste de paridade do PR #13: no Pikachu, com `ui2x = 1`, os ícones do menu X saíam como ruído e o ícone
+  do parceiro sumia; com `ui2x = 0`, normal. No Eevee a mesma comparação saía certa.
+- **Diagnóstico.** O Pikachu com o pacote gerado no Eevee ficava normal: o defeito estava no pacote. As interfaces dos
+  dois jogos têm as mesmas 3081 texturas (mesmas chaves), mas os dados das 3081 diferiam. Gerar de novo no Eevee dava
+  um pacote idêntico (é determinístico), e numa pasta de teste ligada aos arquivos do Eevee também. Gerar de novo no
+  Pikachu deu o pacote certo, idêntico ao do Eevee. Ou seja, foi uma falha isolada: naquela vez o waifu2x terminou em
+  37 s em vez de ~72 s, saiu com código 0 e entregou lixo em todas as imagens (1 em 7 gerações, RTX 3080).
+- **Causa.** O empacotamento (`runtime/ui2x.c`, `pack`) aceitava qualquer saída do waifu2x com o tamanho certo.
+- **Correção.** Cada imagem 2x, reduzida a 1x pela média de 2x2, é comparada com a entrada do waifu2x (cor e alfa).
+  Diferença média acima de 16 (0..255): a imagem fica de fora. Mais de 10% de fora: não sai pacote, e a tela inicial
+  diz que o ampliador falhou e para tentar de novo. Medido: imagens boas até 7,2; o lixo da falha entre 66 e 188.
+  Três gerações seguidas com a conferência: 0 imagens de fora.
+
+## Batalha selvagem quebrava no começo do jogo (19/10/2026, issue #6)
+- **Sintoma.** Com "Batalhas selvagens" ligado, o jogo fechava com `exception c0000005 accessing 0x78` logo depois de
+  "A wild ... appeared!", antes do "Go on, ...!". Relato no Pikachu (Rattata nível 3, Rota 1); o jogador disse que um mod
+  do Gamebanana dava o mesmo.
+- **Diagnóstico.** O loop de capturas (`tools/capture_loop.py`, `wild_battle=1`) com um save da Rota 1 (0:11 de jogo, só
+  Eevee parceiro e um Pidgey) reproduziu nos dois jogos; com saves mais avançados, na mesma Rota 1, não. O crash é em
+  `f_7000a9ddb0` (chamada pelo comando de sequência de batalha `f_7000aeebb0`): ela procura um componente do Pokémon que
+  anda junto, não acha e passa um ponteiro nulo adiante. Tratar esse nulo (e o do setter `f_7000155870(0, 0)` que o
+  próprio código chama nesse caminho, e que tem armadilhas do compilador como escrita em `0x130`) só levou o crash para
+  outro comando (`f_7000adc4c0` -> `f_7000a9a8e0`): a abertura da batalha estática foi feita contando com o acompanhante.
+  As flags do objeto da batalha (`a3..a6`) não mudam isso. Trocar a ordem da equipe no menu (Pidgey no slot 0) fez a
+  batalha correr normal. Os nomes dos nativos de script (`PokePartyIsPartner`, `GetPartnerIndex_` = `f_700019a040`) deram
+  a função que diz o slot do parceiro, `f_70002462e0(0, &slot)`. No save, o cabeçalho da equipe fica em `+0x5A00`
+  (6 índices e, em `+0x0C`, o do parceiro) e os Pokémon em `+0x5C00 + índice x 0x104`; a cópia viva do jogo é outra.
+- **Causa.** Quando o parceiro está no primeiro slot nenhum Pokémon anda junto (no começo do jogo isso nem pode ser
+  mudado), e a abertura da batalha estática não prevê esse caso.
+- **Correção (proteção).** No toque (`trigger_hook`), se o parceiro está no slot 0, o modo selvagem não monta a batalha
+  e o jogo segue com a captura dele. Testado nos dois jogos: save da Rota 1, 3 encontros em cada, todos na captura e
+  sem crash; com o Pidgey no slot 0, a batalha continua. **Falta:** batalha também sem acompanhante (a correção
+  completa).
+
+## Batalha selvagem: o inicial andando sozinho (19/10/2026, issue #6, 0.4.2)
+- **Dois relatos depois da 0.4.1.** O usuário, com o Eevee na frente e o Bulbasaur andando junto, caiu na captura sem
+  precisar: o caso "com acompanhante" tinha sido testado só com o Pidgey movido para o slot 0, e as rodadas com o save
+  dele não acharam encontro (não conferi). O Vaskiemaia, com o Oddish na frente, teve batalha, mas o jogo fechou ao
+  trocar para o Pikachu (vídeo; log com o mesmo `f_7000a9ddc0`, Pikachu).
+- **Vocabulário do jogo.** Nos nativos de script, "partner" é o Pokémon que anda com o jogador e "buddy" é o inicial
+  (`f_70001760d0`: Pikachu forma 8 ou Eevee forma 1). `f_70002462e0(0, &slot)` (o `GetPartnerIndex_`) dá o slot de
+  quem anda junto, não do inicial. No save, o cabeçalho da equipe (`+0x5A00`) tem quem anda junto no slot 0; os
+  blocos do save são conferidos por CRC16-ARC (tabela `FEEB` no fim: tamanho, id, checksum).
+- **A causa.** Em batalha simples, `f_7000a88780` (abertura) e `f_7000a8ced0` (troca) mandam o inicial com
+  `ee422.bseq` (o método virtual `f_7000a7e090` pergunta se é o inicial); os outros vão com `ee420.bseq` (Poké Ball). A
+  `ee422` leva para a batalha o modelo de campo de quem anda junto; com o inicial andando sozinho, a batalha estática
+  não tem esse modelo e `f_7000a9ddb0` lê um nulo. Por isso quebra também na troca.
+- **O que não resolveu.** Os scripts das batalhas estáticas do jogo (`bin/archive/script_amx.gfpak`, AMX de 64 bits em
+  codificação compacta; nomes de nativos pelo hash `h = h * 0x83 ^ byte`, achado no registrador `f_70006705e0`)
+  recolhem quem anda junto e o inicial montado antes do `CallWildBattle` (`StartFollowPartnerIntoTheBall_` =
+  `f_7000243bb0`, `StartRidePartnerIntoTheBall_` = `f_7000243d90`). Chamar isso antes da batalha, com ou sem espera,
+  apagar os dois (`f_7000244440`, `f_7000244620`), fazê-lo reaparecer montado (`f_7000244270`, recusa), outro molde
+  (Electrode) e forçar a `ee420` (ela tem o ramo do inicial no ombro e quebra em `f_7000adc1f0` -> `f_7000a9bf20`)
+  não resolveram.
+- **Correção (proteção, 0.4.2).** No toque (`starter_walks_alone`), se quem anda junto é o próprio inicial (ou ninguém),
+  o encontro vai para a captura do jogo; com outro Pokémon andando junto, batalha, e o inicial pode entrar. A regra da
+  0.4.1 ("inicial no slot 0") sai.
+- **Ferramentas.** `LARECOMP_SCAN_LEN` / `LARECOMP_SCAN_NOPTR` na varredura de memória (docs/DEPURACAO.md).
+  **Lição:** um caso só conta como testado quando o log mostra o evento dele; testar com cópia do save do usuário.
