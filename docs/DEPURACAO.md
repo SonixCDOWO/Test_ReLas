@@ -73,6 +73,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_GI_DEBUG_EXPOSURE=<x>` | exposição da vista "só a luz indireta" (GI) do menu avançado; padrão 16 (a cena HDR do jogo é escura antes da exposição dele) |
 | `LARECOMP_MVO_PROBE=<frame>` | registra, para cada draw com vetores por objeto daquele quadro, os blocos de constantes do quadro anterior: idênticos, faltando (`MISSING`) ou rejeitados por salto (`REJECTED`, com a palavra e os valores) |
 | `LARECOMP_FSR3_MASK_DUMP=<frame>` | salva a máscara da interface que o FSR 3.1 recebe naquele quadro em `build/frames/uimask_N.png` |
+| `LARECOMP_FONT_SCALE=<1..4>` | força a escala do texto (`runtime/hle/font_hires.c`) em vez da automática pela altura da janela; `1` desliga (para comparar) |
+| `LARECOMP_FONT_LOG=1` | registra os primeiros 400 glifos que o cache de fonte do jogo desenha (código, tamanho, métricas em 1x e em Nx, célula e linha) e o tamanho das texturas de cache em Nx (`runtime/hle/font_hires.c`) |
 | `LARECOMP_MV_YSIGN=-1` | (validação) inverte a convenção de y NDC dos vetores de movimento; o certo no Let's Go é o padrão (+1) |
 | Estatística a cada 2 s (`[vk] t=...`) | draws, passes, dispatches, uploads, `compile N (translate, spirv, pipelines, draws waited)` (programas e pipelines prontos, o tempo de CPU de cada etapa e quanto os draws esperaram por eles). Para medir uma primeira visita, renomeie `cache/` antes do teste e devolva depois e `[skip: ...]` com os draws pulados por motivo |
 | `tools/perf_summary.py [log]` | resumo de uma sessão: faixa de fps, quadros acima de 50 ms, draws pulados, compilações, underruns de áudio (padrão: `logs/jogo.log`) |

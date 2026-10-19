@@ -85,6 +85,7 @@ typedef struct TexBackend {
     bool astc_srgb;
     int reg;  // slot in textures.c's live list + 1 (a reboot destroys them all)
     uint64_t dirty_seq;  // last host write (backend_pool_written) this texture was checked against
+    uint8_t font_k;      // > 1: a glyph cache drawn at that scale (runtime/hle/font_hires.c): filled from its K x image
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)

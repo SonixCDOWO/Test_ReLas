@@ -3367,6 +3367,7 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
     extern void vk_tex_unscale(NvnTexture *t);
     vk_tex_unscale(t);  // the copied data is full size: no output-resolution scaling for this texture
     TexBackend *b = vk_tex(t, false);  // prior CPU contents uploaded first
+    if (b->font_k > 1) return;  // (a glyph cache drawn at K x: its glyphs come from that copy, textures.c)
     renderer_mark_gpu_owned(t);
     if (b->aspect == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) return;
     if (b->astc_bw) {  // (blocks would need the CPU decode: not seen in the game yet)

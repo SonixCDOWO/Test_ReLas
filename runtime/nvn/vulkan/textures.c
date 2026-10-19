@@ -205,6 +205,7 @@ bool renderer_texture_presented(NvnTexture *t) {
 void renderer_texture_scale(NvnTexture *t, float *sx, float *sy) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     if (b && b->scalable) { *sx = b->sx; *sy = b->sy; }
+    else if (b && b->font_k > 1) { *sx = *sy = b->font_k; }
     else { *sx = 1; *sy = 1; }
 }
 
@@ -237,6 +238,25 @@ void vk_collect_dead(void) {
     ndead = k;
 }
 
+// The game's glyph caches (8-bit linear 2D textures the text is drawn from) are drawn again at K x on the host
+// (runtime/hle/font_hires.c): such a texture gets an image K times as large, filled from that K x copy instead of
+// guest memory. K, or 1 for every other texture.
+int font_hires_scale(uint64_t addr, uint32_t w, uint32_t h);
+bool font_hires_begin(uint64_t addr, const uint8_t **px, uint32_t *row, uint32_t *x0, uint32_t *y0, uint32_t *x1,
+                      uint32_t *y1);
+void font_hires_end(void);
+static int font_cache_k(const NvnTexture *t) {
+    if (t->target != 1 || !(t->flags & 0x10) || t->levels > 1 || !t->layout.fmt || t->layout.fmt->bpb != 1 || !t->addr) return 1;
+    return font_hires_scale(t->addr, t->width, t->height);
+}
+
+// The glyph caches' scale (runtime/hle/font_hires.c): one step per 720 lines of the window, up to 4 (1: off).
+int renderer_font_scale(void) {
+    uint32_t h = g_vk.sc_extent.height;
+    int k = (int)((h + 719) / 720);
+    return k < 1 ? 1 : k > 4 ? 4 : k;
+}
+
 static void create_image(NvnTexture *t, TexBackend *b) {
     VkFmt mf = fmt_of(t->format);
     b->sx = b->scalable ? g_rs_x : 1;
@@ -247,6 +267,8 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         if (tw < 1) tw = 1;
         if (th < 1) th = 1;
     }
+    b->font_k = font_cache_k(t);
+    if (b->font_k > 1) { tw *= b->font_k; th *= b->font_k; }
     VkImageType type = VK_IMAGE_TYPE_2D;
     uint32_t layers = 1, depth = 1;
     switch (t->target) {
@@ -469,6 +491,44 @@ static void upload_pending(TexBackend *b) {
 }
 
 uint64_t prof_tex_checks, prof_tex_samples, prof_tex_full, prof_tex_full_bytes, prof_tex_dyn;
+// A glyph cache drawn at K x: the part of its K x copy that changed (all of it the first time).
+static void upload_font_cache(NvnTexture *t, TexBackend *b) {
+    const uint8_t *px;
+    uint32_t row, x0, y0, x1, y1;
+    if (!font_hires_begin(t->addr, &px, &row, &x0, &y0, &x1, &y1)) return;
+    if (!b->uploaded) { x0 = 0; y0 = 0; x1 = b->width; y1 = b->height; b->uploaded = true; }
+    if (x1 > b->width) x1 = b->width;
+    if (y1 > b->height) y1 = b->height;
+    if (x1 > x0 && y1 > y0 && row >= b->width) {
+        uint32_t w = x1 - x0, h = y1 - y0;
+        VkSpan s = vk_transient((uint64_t)w * h, 16);
+        for (uint32_t y = 0; y < h; y++) memcpy((uint8_t *)s.ptr + (uint64_t)y * w, px + (uint64_t)(y0 + y) * row + x0, w);
+        VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = w, .bufferImageHeight = h,
+                                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageOffset = {(int32_t)x0, (int32_t)y0, 0},
+                                .imageExtent = {w, h, 1}};
+        VkCommandBuffer cb = vk_upload_cmd();
+        vk_dl_note_upload((void *)b->image, w, h, 0);
+        vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    }
+    font_hires_end();
+}
+
+// A glyph cache drawn at K x (made so if it became one after its image was made): its K x copy is uploaded, whoever
+// owns the texture (the game's GPU writes into it are dropped or redone from that copy). False: any other texture.
+static bool font_cache_use(NvnTexture *t, TexBackend *b) {
+    {
+        int fk = font_cache_k(t);
+        if (fk != (b->font_k ? b->font_k : 1)) {  // (became a glyph cache after its image was made)
+            LOG("[vk] glyph cache %ux%u at %llx: drawn at %dx\n", t->width, t->height, (unsigned long long)t->addr, fk);
+            destroy_image(b);
+            create_image(t, b);
+            b->uploaded = false;
+        }
+        if (b->font_k > 1) { upload_font_cache(t, b); return true; }
+    }
+    return false;
+}
+
 static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (!t->addr || t->target == 10) return;
     uint64_t frame = vk_frame_counter();
@@ -637,6 +697,7 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     if (t->addr && !for_render) dirty_check(t, b);
     if (b->pending_rgba) upload_pending(b);
     if (for_render) b->gpu_owned = true;
+    else if ((b->font_k > 1 || t->flags & 0x10) && font_cache_use(t, b)) return b;
     else if (!b->gpu_owned) {
         extern uint64_t prof_up_ns;
         uint64_t t0 = prof_up_ns != ~0ull ? SDL_GetTicksNS() : 0;
@@ -646,7 +707,11 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     return b;
 }
 
-void renderer_mark_gpu_owned(NvnTexture *t) { tex_backend(t)->gpu_owned = true; }
+void renderer_mark_gpu_owned(NvnTexture *t) {
+    TexBackend *b = tex_backend(t);
+    b->gpu_owned = true;
+    if (b->font_k > 1) b->uploaded = false;  // (a glyph cache the GPU wrote: all of its K x copy again)
+}
 bool renderer_is_gpu_owned(NvnTexture *t) { return tex_backend(t)->gpu_owned; }
 // Host-produced texel data (decoded video, any thread): applied on the render thread at the texture's next use.
 void renderer_upload_rgba(NvnTexture *t, const void *rgba, uint32_t w, uint32_t h, uint32_t stride) {

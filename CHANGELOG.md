@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Sharper text at high resolutions** (always on, nothing to set): the game rasterizes its text with the system font into
+  a 2048x1024 glyph cache at sizes 22-36, which went blurry when stretched to 1440p or 4K. Every glyph the game caches is
+  now rasterized again by the same engine (nn::fontll) at N x its size into an N x copy of the cache, which the renderer
+  samples instead of the original (same coordinates, so placement and layout are the game's). N is one step per 720
+  lines of the window when the game starts (720p: off, 1440p: 2x, 4K: 3x). Cost: one extra glyph rasterization per new glyph and only the changed part of
+  the cache uploaded (one full upload when the cache is made). `runtime/hle/font_hires.c`.
 - **In-game settings on F12**: volume, brightness, contrast and saturation, applied live and saved to `larecomp.ini`
   (`brightness`, `contrast`, `saturation`). From a controller: − and + together, then *Settings*.
   `LARECOMP_MENU_KEY=<key name>` picks another key (Steam takes F12 for screenshots). The colour pass runs on the
