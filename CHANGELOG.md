@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 (2026-10-19)
 
 - **Wild battles no longer crash early in the game** (#6): with the partner in the first party slot no Pokémon walks
   alongside the player, and the battle's opening was made for one (the game stopped right after "A wild ... appeared!").
