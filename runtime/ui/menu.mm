@@ -44,6 +44,7 @@ static void pick_menu_language(void) {
 // ------------------------------------------------------------------ state shared with the main thread
 static std::atomic<bool> g_open{false};  // the "close the game?" question is up
 static std::atomic<bool> g_cfg{false};   // the F12 settings are up
+static int g_cfg_page;                   // 0 the settings, 1 the advanced ones (render thread)
 static std::atomic<bool> g_want_fullscreen_apply{false};
 
 struct QEvent {
@@ -75,6 +76,7 @@ static void set_cfg(bool open) {
     if (open == g_cfg.load()) return;
     if (open) set_open(false);
     g_cfg.store(open);
+    if (!open) g_cfg_page = 0;
     input_reset();
     if (!open) settings_save();
 }
@@ -447,78 +449,143 @@ static void quit_draw(ImGuiIO &io, float scale) {
 
 // F12: volume and the game image's colour, applied live (runtime/services/audio.c apply_gain, runtime/nvn/vulkan/exec.c
 // post_process); saved to larecomp.ini on closing. B / Esc / F12 close.
-static void cfg_draw(ImGuiIO &io, float scale) {
-    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 70));
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(fminf(io.DisplaySize.x * 0.9f, 820 * scale), 0), ImGuiCond_Always);
-    ImGui::Begin("##cfg", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    // (fixed width, height fitted: the sliders fill the line, which an auto-resized window cannot have)
-    ImGui::PushFont(g_mlang == 2 ? g_font : g_menu_font);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Settings", "Configurações", "Настройки"));
-    ImGui::PopFont();
-    struct Row { const char *label; float *v, lo, hi; } rows[] = {
-        {M("Volume", "Volume", "Громкость"), &g_settings.volume, 0.0f, 2.0f},
-        {M("Brightness", "Brilho", "Яркость"), &g_settings.brightness, 0.5f, 1.5f},
-        {M("Contrast", "Contraste", "Контраст"), &g_settings.contrast, 0.5f, 1.5f},
-        {M("Saturation", "Saturação", "Насыщенность"), &g_settings.saturation, 0.0f, 2.0f},
-    };
-    float lw = 0;
-    for (const Row &r : rows) lw = fmaxf(lw, ImGui::CalcTextSize(r.label).x);
-    for (int i = 0; i < 4; i++) {
-        const Row &r = rows[i];
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(r.label);
-        ImGui::SameLine(lw + ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2);
-        ImGui::SetNextItemWidth(-1);
-        float pct = *r.v * 100;
-        ImGui::PushID(i);
-        if (ImGui::SliderFloat("##v", &pct, r.lo * 100, r.hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *r.v = pct / 100;
-        ImGui::PopID();
-        if (!i) ImGui::SetItemDefaultFocus();  // (d-pad / arrows pick a row; A / Enter, then left-right, changes it)
-    }
-    // SSAO (runtime/nvn/vulkan/exec.c ssao_run): shading in creases and contact points, from the game's depth
-    ImGui::Separator();
-    ImGui::Checkbox(M("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)"), &g_settings.ssao);
+// A label and the slider beside it, the sliders lined up at x (the widest label of the page)
+static bool cfg_row(const char *label, float x) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(x);
+    ImGui::SetNextItemWidth(-1);
+    return true;
+}
+static float cfg_label_x(const char *const *labels, int n) {
+    float w = 0;
+    for (int i = 0; i < n; i++) w = fmaxf(w, ImGui::CalcTextSize(labels[i]).x);
+    return w + ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2;
+}
+
+// Advanced settings (the "Advanced..." button): SSAO and GI parameters, the debug views
+static void cfg_advanced(float scale, bool *close) {
+    const char *l_int = M("Intensity", "Intensidade", "Сила"), *l_rad = M("Radius", "Raio", "Радиус"),
+               *l_thick = M("Thickness", "Espessura", "Толщина"), *l_rays = M("Rays", "Raios", "Лучи"),
+               *l_steps = M("Steps", "Passos", "Шаги"), *l_res = M("Resolution", "Resolução", "Разрешение");
+    const char *labels[] = {l_int, l_rad, l_thick, l_rays, l_steps, l_res};
+    float x = cfg_label_x(labels, 6);
+    // SSAO (runtime/nvn/vulkan/exec.c ssao_run)
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)"));
     ImGui::BeginDisabled(!g_settings.ssao);
     {
-        float x = lw + ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2;
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(M("Intensity", "Intensidade", "Сила"));
-        ImGui::SameLine(x);
-        ImGui::SetNextItemWidth(-1);
         float pct = g_settings.ssao_intensity * 100;
+        cfg_row(l_int, x);
         if (ImGui::SliderFloat("##ssao_i", &pct, 0, 300, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.ssao_intensity = pct / 100;
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(M("Radius", "Raio", "Радиус"));
-        ImGui::SameLine(x);
-        ImGui::SetNextItemWidth(-1);
+        ImGui::SetItemDefaultFocus();
+        cfg_row(l_rad, x);
         ImGui::SliderFloat("##ssao_r", &g_settings.ssao_radius, 10, 400, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::Checkbox(M("Accumulate over frames##ssao", "Acumular entre quadros##ssao", "Накопление по кадрам##ssao"), &g_settings.ssao_temporal);
+        ImGui::SameLine();
         ImGui::Checkbox(M("Show the occlusion alone", "Mostrar só a oclusão", "Только затенение"), &g_settings.ssao_debug);
     }
     ImGui::EndDisabled();
-    // the shadow map's filter (runtime/nvn/vulkan/textures.c vk_sampler, runtime/nvn/maxwell/translate.c shpcf)
+    // GI (runtime/nvn/vulkan/exec.c gi_run): one bounce of the visible light, traced in screen space
     ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)"));
+    ImGui::BeginDisabled(!g_settings.gi);
     {
-        const char *names[] = {M("Game's", "Do jogo", "Как в игре"), M("Bilinear", "Bilinear", "Билинейный"),
-                               M("Smooth", "Suave", "Мягкий")};
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(M("Shadow filter", "Filtro das sombras", "Фильтр теней"));
-        ImGui::SameLine(lw + ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2);
-        ImGui::SetNextItemWidth(-1);
-        ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, names, 3);
+        float pct = g_settings.gi_intensity * 100;
+        cfg_row(l_int, x);
+        if (ImGui::SliderFloat("##gi_i", &pct, 0, 400, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.gi_intensity = pct / 100;
+        cfg_row(l_rad, x);
+        ImGui::SliderFloat("##gi_r", &g_settings.gi_radius, 50, 1000, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        cfg_row(l_thick, x);
+        ImGui::SliderFloat("##gi_t", &g_settings.gi_thickness, 5, 100, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        cfg_row(l_rays, x);
+        ImGui::SliderInt("##gi_rays", &g_settings.gi_rays, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+        cfg_row(l_steps, x);
+        ImGui::SliderInt("##gi_steps", &g_settings.gi_steps, 4, 32, "%d", ImGuiSliderFlags_AlwaysClamp);
+        const char *res[] = {M("Half", "Metade", "1/2"), M("Third", "Um terço", "1/3"), M("Quarter", "Um quarto", "1/4")};
+        int r = g_settings.gi_div - 2;
+        cfg_row(l_res, x);
+        if (ImGui::Combo("##gi_res", &r, res, 3)) g_settings.gi_div = r + 2;
+        ImGui::Checkbox(M("Accumulate over frames##gi", "Acumular entre quadros##gi", "Накопление по кадрам##gi"), &g_settings.gi_temporal);
+        ImGui::SameLine();
+        ImGui::Checkbox(M("Show the indirect light alone", "Mostrar só a luz indireta", "Только непрямой свет"), &g_settings.gi_debug);
     }
+    ImGui::EndDisabled();
+    // (debug) the camera motion vectors the temporal effects build on (runtime/nvn/vulkan/exec.c mv_run)
+    ImGui::Separator();
+    ImGui::Checkbox(M("Show motion vectors (debug)", "Mostrar vetores de movimento (depuração)", "Векторы движения (отладка)"),
+                    &g_settings.mv_debug);
     settings_clamp_color();
     ImGui::Spacing();
     float bw = 240 * scale;
-    if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0))) {
-        g_settings.volume = g_settings.brightness = g_settings.contrast = g_settings.saturation = 1.0f;
-        g_settings.ssao_intensity = 1.0f, g_settings.ssao_radius = 80.0f, g_settings.ssao_debug = false;  // (on / off stays)
+    if (ImGui::Button(M("Back", "Voltar", "Назад"), ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+        g_cfg_page = 0;
+    ImGui::SameLine();
+    if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0))) {  // (on / off stay)
+        g_settings.ssao_intensity = 2.0f, g_settings.ssao_radius = 100.0f, g_settings.ssao_temporal = true;
+        g_settings.gi_intensity = 2.0f, g_settings.gi_radius = 300.0f, g_settings.gi_thickness = 25.0f;
+        g_settings.gi_rays = 4, g_settings.gi_steps = 8, g_settings.gi_div = 2, g_settings.gi_temporal = true;
+        g_settings.ssao_debug = g_settings.gi_debug = g_settings.mv_debug = false;
     }
     ImGui::SameLine();
-    bool close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0));
+    *close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0));
+}
+
+static void cfg_draw(ImGuiIO &io, float scale) {
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 70));
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(fminf(io.DisplaySize.x * 0.9f, 900 * scale), 0), ImGuiCond_Always);
+    // (one window per page: a page appearing gets its default focus)
+    ImGui::Begin(g_cfg_page ? "##cfg_adv" : "##cfg", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    // (fixed width, height fitted: the sliders fill the line, which an auto-resized window cannot have)
+    ImGui::PushFont(g_mlang == 2 ? g_font : g_menu_font);
+    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", g_cfg_page ? M("Advanced settings", "Configurações avançadas", "Дополнительно")
+                                                                       : M("Settings", "Configurações", "Настройки"));
+    ImGui::PopFont();
+    bool close = false;
+    if (g_cfg_page) {
+        cfg_advanced(scale, &close);
+    } else {
+        struct Row { const char *label; float *v, lo, hi; } rows[] = {
+            {M("Volume", "Volume", "Громкость"), &g_settings.volume, 0.0f, 2.0f},
+            {M("Brightness", "Brilho", "Яркость"), &g_settings.brightness, 0.5f, 1.5f},
+            {M("Contrast", "Contraste", "Контраст"), &g_settings.contrast, 0.5f, 1.5f},
+            {M("Saturation", "Saturação", "Насыщенность"), &g_settings.saturation, 0.0f, 2.0f},
+        };
+        const char *labels[] = {rows[0].label, rows[1].label, rows[2].label, rows[3].label,
+                                M("Shadow filter", "Filtro das sombras", "Фильтр теней")};
+        float x = cfg_label_x(labels, 5);
+        for (int i = 0; i < 4; i++) {
+            const Row &r = rows[i];
+            float pct = *r.v * 100;
+            cfg_row(r.label, x);
+            ImGui::PushID(i);
+            if (ImGui::SliderFloat("##v", &pct, r.lo * 100, r.hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *r.v = pct / 100;
+            ImGui::PopID();
+            if (!i) ImGui::SetItemDefaultFocus();  // (d-pad / arrows pick a row; A / Enter, then left-right, changes it)
+        }
+        ImGui::Separator();
+        // the effects on / off here, their parameters on the advanced page
+        ImGui::Checkbox(M("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)"), &g_settings.ssao);
+        ImGui::SameLine();
+        ImGui::Checkbox(M("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)"), &g_settings.gi);
+        // the shadow map's filter (runtime/nvn/vulkan/textures.c vk_sampler, runtime/nvn/maxwell/translate.c shpcf)
+        const char *names[] = {M("Game's", "Do jogo", "Как в игре"), M("Bilinear", "Bilinear", "Билинейный"),
+                               M("Smooth", "Suave", "Мягкий")};
+        cfg_row(labels[4], x);
+        ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, names, 3);
+        settings_clamp_color();
+        ImGui::Spacing();
+        float bw = 240 * scale;
+        if (ImGui::Button(M("Advanced...", "Avançado...", "Дополнительно..."), ImVec2(bw, 0))) g_cfg_page = 1;
+        ImGui::SameLine();
+        if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0)))
+            g_settings.volume = g_settings.brightness = g_settings.contrast = g_settings.saturation = 1.0f;
+        ImGui::SameLine();
+        close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+    }
     ImGui::TextDisabled("%s", M("F12 or Esc closes", "F12 ou Esc fecha", "F12 или Esc — закрыть"));
     ImGui::End();
-    if (close || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) set_cfg(false);
+    if (close) set_cfg(false);
 }
 
 void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {

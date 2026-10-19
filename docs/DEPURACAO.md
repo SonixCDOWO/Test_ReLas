@@ -68,6 +68,10 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | Variável | Efeito |
 |---|---|
 | `LARECOMP_SHOT_AT=<frame>,...` | salva o quadro do jogo em `build/frames/frame_N.png` |
+| `LARECOMP_MV_DUMP=<frame>,...` | salva os vetores de movimento da câmera daquele quadro em `build/frames/mv_N.png` (RGBA8: 0,5 + 32 × velocidade em uv; a imagem sai invertida em y como os `frame_N.png`). `tools/mv_check.py build/frames N` confere: reprojeta o quadro anterior com eles e compara o erro |
+| `LARECOMP_SSAO_DUMP=<frame>,...` | salva a oclusão (SSAO) como aplicada naquele quadro, depois do blur e do histórico, em `build/frames/ao_N.png`. `tools/ssao_temporal_check.py <sem> <com>` compara duas execuções com a mesma entrada (acumulação desligada / ligada): fantasma (temporal mais escuro > 2%) e ruído; `tools/ssao_temporal_sheet.py` monta recortes ampliados com a diferença |
+| `LARECOMP_GI_DEBUG_EXPOSURE=<x>` | exposição da vista "só a luz indireta" (GI) do menu avançado; padrão 16 (a cena HDR do jogo é escura antes da exposição dele) |
+| `LARECOMP_MV_YSIGN=-1` | (validação) inverte a convenção de y NDC dos vetores de movimento; o certo no Let's Go é o padrão (+1) |
 | Estatística a cada 2 s (`[vk] t=...`) | draws, passes, dispatches, uploads, `compile N (translate, spirv, pipelines, draws waited)` (programas e pipelines prontos, o tempo de CPU de cada etapa e quanto os draws esperaram por eles). Para medir uma primeira visita, renomeie `cache/` antes do teste e devolva depois e `[skip: ...]` com os draws pulados por motivo |
 | `tools/perf_summary.py [log]` | resumo de uma sessão: faixa de fps, quadros acima de 50 ms, draws pulados, compilações, underruns de áudio (padrão: `logs/jogo.log`) |
 | `LARECOMP_FRAMETIME_CSV=<arquivo>` | grava `present,dt_ms` para cada present do jogo (exceto o primeiro), com tempo monotônico; quadro intermediário extra do menu a 60 não conta. Usar um caminho em `build/` |

@@ -23,10 +23,22 @@ typedef struct {
     float contrast;      // 1 = unchanged for all three; brightness / contrast 0.5..1.5, saturation 0..2
     float saturation;
     bool ssao;            // screen-space ambient occlusion on the game's HDR scene (F12 menu; runtime/nvn/vulkan/exec.c)
-    float ssao_intensity; // 0..3, 1 = the default strength
-    float ssao_radius;    // in the game's world units (~cm): 10..400
+    float ssao_intensity; // 0..3 (default 2)
+    float ssao_radius;    // in the game's world units (~cm): 10..400 (default 100)
+    bool ssao_temporal;   // accumulated over frames along the camera motion vectors (exec.c ssao_run)
     bool ssao_debug;      // (not saved) the scene shows the occlusion alone
+    bool mv_debug;        // (not saved) the scene shows its camera motion vectors (runtime/nvn/vulkan/exec.c scene_hook)
     int shadow_filter;    // SHADOW_*: how the shadow map is filtered (F12 menu; textures.c vk_sampler, translate.c shpcf)
+    // screen-space indirect light, one bounce (F12 menu / advanced; runtime/nvn/vulkan/exec.c gi_run). World units ~cm
+    bool gi;
+    float gi_intensity;   // 0..4 (default 2): x the diffuse reflectance (0.5)
+    float gi_radius;      // the rays' reach: 50..1000 (default 300)
+    float gi_thickness;   // depth tolerance of a hit: 5..100 (default 25)
+    int gi_rays;          // per GI pixel: 1..8 (default 4)
+    int gi_steps;         // depth checks per ray: 4..32 (default 8)
+    int gi_div;           // GI resolution: 2 half, 3 third, 4 quarter of each axis (default 2)
+    bool gi_temporal;     // accumulated over frames along the camera motion vectors (default on)
+    bool gi_debug;        // (not saved) the indirect light alone, shown at the present
     float mouse_sens;    // mouse aim (the virtual gyro, runtime/hle/input.c): degrees per pixel
     float stick_deadzone;  // a controller's sticks: the share of their travel read as rest (runtime/hle/input.c)
     bool reverb;         // room reverb effect

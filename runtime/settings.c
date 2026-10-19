@@ -24,9 +24,18 @@ Settings g_settings = {
     .contrast = 1.0f,
     .saturation = 1.0f,
     .ssao = false,
-    .ssao_intensity = 1.0f,
-    .ssao_radius = 80.0f,
+    .ssao_intensity = 2.0f,
+    .ssao_radius = 100.0f,
+    .ssao_temporal = true,
     .shadow_filter = SHADOW_SMOOTH,
+    .gi = false,
+    .gi_intensity = 2.0f,
+    .gi_radius = 300.0f,
+    .gi_thickness = 25.0f,
+    .gi_rays = 4,
+    .gi_steps = 8,
+    .gi_div = 2,
+    .gi_temporal = true,
     .mouse_sens = 0.1f,
     .stick_deadzone = 0.15f,
     .reverb = true,
@@ -60,9 +69,20 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "ssao")) g_settings.ssao = atoi(val) != 0;
     else if (!strcmp(key, "ssao_intensity")) g_settings.ssao_intensity = (float)atof(val);
     else if (!strcmp(key, "ssao_radius")) g_settings.ssao_radius = (float)atof(val);
+    else if (!strcmp(key, "ssao_temporal")) g_settings.ssao_temporal = atoi(val) != 0;
+    else if (!strcmp(key, "gi")) g_settings.gi = atoi(val) != 0;
+    else if (!strcmp(key, "gi_intensity")) g_settings.gi_intensity = (float)atof(val);
+    else if (!strcmp(key, "gi_radius")) g_settings.gi_radius = (float)atof(val);
+    else if (!strcmp(key, "gi_thickness")) g_settings.gi_thickness = (float)atof(val);
+    else if (!strcmp(key, "gi_rays")) g_settings.gi_rays = atoi(val);
+    else if (!strcmp(key, "gi_steps")) g_settings.gi_steps = atoi(val);
+    else if (!strcmp(key, "gi_resolution")) g_settings.gi_div = atoi(val);
+    else if (!strcmp(key, "gi_temporal")) g_settings.gi_temporal = atoi(val) != 0;
+    else if (!strcmp(key, "gi_debug")) g_settings.gi_debug = atoi(val) != 0;  // (by hand / tests: never saved)
     else if (!strcmp(key, "shadow_filter"))
         g_settings.shadow_filter = !strcmp(val, "game") ? SHADOW_GAME : !strcmp(val, "bilinear") ? SHADOW_BILINEAR : SHADOW_SMOOTH;
     else if (!strcmp(key, "ssao_debug")) g_settings.ssao_debug = atoi(val) != 0;  // (by hand / tests: never saved)
+    else if (!strcmp(key, "mv_debug")) g_settings.mv_debug = atoi(val) != 0;      // (the same)
     else if (!strcmp(key, "mouse_sens")) g_settings.mouse_sens = (float)atof(val);
     else if (!strcmp(key, "stick_deadzone")) g_settings.stick_deadzone = (float)atof(val);
     else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
@@ -89,9 +109,15 @@ void settings_clamp_color(void) {
     g_settings.brightness = clampf_(g_settings.brightness, 0.5f, 1.5f);
     g_settings.contrast = clampf_(g_settings.contrast, 0.5f, 1.5f);
     g_settings.saturation = clampf_(g_settings.saturation, 0.0f, 2.0f);
-    g_settings.ssao_intensity = g_settings.ssao_intensity != g_settings.ssao_intensity ? 1 : clampf_(g_settings.ssao_intensity, 0.0f, 3.0f);
-    g_settings.ssao_radius = g_settings.ssao_radius != g_settings.ssao_radius ? 80 : clampf_(g_settings.ssao_radius, 10.0f, 400.0f);
+    g_settings.ssao_intensity = g_settings.ssao_intensity != g_settings.ssao_intensity ? 2 : clampf_(g_settings.ssao_intensity, 0.0f, 3.0f);
+    g_settings.ssao_radius = g_settings.ssao_radius != g_settings.ssao_radius ? 100 : clampf_(g_settings.ssao_radius, 10.0f, 400.0f);
     if (g_settings.shadow_filter < SHADOW_GAME || g_settings.shadow_filter > SHADOW_SMOOTH) g_settings.shadow_filter = SHADOW_SMOOTH;
+    g_settings.gi_intensity = clampf_(g_settings.gi_intensity, 0.0f, 4.0f);
+    g_settings.gi_radius = g_settings.gi_radius != g_settings.gi_radius ? 300 : clampf_(g_settings.gi_radius, 50.0f, 1000.0f);
+    g_settings.gi_thickness = g_settings.gi_thickness != g_settings.gi_thickness ? 25 : clampf_(g_settings.gi_thickness, 5.0f, 100.0f);
+    g_settings.gi_rays = g_settings.gi_rays < 1 ? 1 : g_settings.gi_rays > 8 ? 8 : g_settings.gi_rays;
+    g_settings.gi_steps = g_settings.gi_steps < 4 ? 4 : g_settings.gi_steps > 32 ? 32 : g_settings.gi_steps;
+    g_settings.gi_div = g_settings.gi_div < 2 ? 2 : g_settings.gi_div > 4 ? 4 : g_settings.gi_div;
 }
 
 void settings_load(void) {
@@ -142,6 +168,15 @@ void settings_save(void) {
     fprintf(f, "ssao = %d\n", g_settings.ssao);
     fprintf(f, "ssao_intensity = %.2f\n", g_settings.ssao_intensity);
     fprintf(f, "ssao_radius = %.0f\n", g_settings.ssao_radius);
+    fprintf(f, "ssao_temporal = %d\n", g_settings.ssao_temporal);
+    fprintf(f, "gi = %d\n", g_settings.gi);
+    fprintf(f, "gi_intensity = %.2f\n", g_settings.gi_intensity);
+    fprintf(f, "gi_radius = %.0f\n", g_settings.gi_radius);
+    fprintf(f, "gi_thickness = %.0f\n", g_settings.gi_thickness);
+    fprintf(f, "gi_rays = %d\n", g_settings.gi_rays);
+    fprintf(f, "gi_steps = %d\n", g_settings.gi_steps);
+    fprintf(f, "gi_resolution = %d\n", g_settings.gi_div);
+    fprintf(f, "gi_temporal = %d\n", g_settings.gi_temporal);
     fprintf(f, "shadow_filter = %s\n", g_settings.shadow_filter == SHADOW_GAME ? "game" :
                                        g_settings.shadow_filter == SHADOW_BILINEAR ? "bilinear" : "smooth");
     fprintf(f, "reverb = %d\n", g_settings.reverb);

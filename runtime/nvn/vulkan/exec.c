@@ -866,8 +866,26 @@ static struct {
     float proj[4];             // P00, P11, A, B (GL style: z_ndc = (A z + B) / -z)
     int pbind;                 // where the projection was found: vertex cbuf, byte offset
     uint32_t poff;
+    // the camera (motion vectors): view-projection of this frame and the one before (row-major, GL style)
+    double vp[16], vp_prev[16];
+    uint64_t vp_frame;
+    bool prev_ok;              // vp_prev is the frame just before vp's
 } ao = {.pbind = -1};
 static void ssao_run(void);
+// The debug views (F12: the occlusion alone, the motion vectors) replace the game image at the present, after the
+// game's own passes (fog, bloom, tone mapping): written into the scene they came out white or washed out.
+static TexBackend *debug_view;  // RGBA8 at the depth's size, written by ssao_run
+static uint64_t debug_view_frame;
+// GI: the luminance a sample of bounced light is clamped to (the scene's HDR units: no fireflies from the sun-lit
+// highlights); the debug view's exposure
+#define GI_LUMA_CLAMP 4.0f
+#define GI_DEBUG_EXPOSURE 16.0f  // (the scene is dim before the game's exposure: x16 shows the bounce)
+// Camera motion vectors wanted this frame (their debug view, LARECOMP_MV_DUMP; temporal effects later)
+static bool mv_wanted(void) {
+    static int dump = -1;
+    if (dump < 0) dump = getenv("LARECOMP_MV_DUMP") != NULL;
+    return g_settings.mv_debug || dump || (g_settings.ssao && g_settings.ssao_temporal) || (g_settings.gi && g_settings.gi_temporal);
+}
 
 // ================================================================== render passes
 static VkFormat pass_color[8], pass_depth, pass_stencil;
@@ -979,7 +997,7 @@ static void begin_pass(void) {
     if (!w) { pass_sx = pass_sy = 1; minw = minh = 16; }
     pass_w = minw; pass_h = minh;
     ao.qual = false;
-    if (g_settings.ssao && pass_ncolor && ca[0].imageView && has_d && pass_samples == 1 && st.rt.color[0]) {
+    if ((g_settings.ssao || g_settings.gi || mv_wanted()) && pass_ncolor && ca[0].imageView && has_d && pass_samples == 1 && st.rt.color[0]) {
         TexBackend *c0 = st.rt.color[0]->backend;
         VkFormat f = pass_color[0];
         if (c0 && c0->scalable && (f == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || f == VK_FORMAT_R16G16B16A16_SFLOAT ||
@@ -2433,6 +2451,36 @@ static bool ssao_proj_at(const float *m, float out[4]) {
     return false;
 }
 
+// The camera of this frame, from the projection found at p (row-major): the view matrix right before it (Let's Go's
+// scene block: view +0, projection +64, view-projection +128), checked to be a rigid transform. vp = P x V, and the
+// previous frame's kept when it is the frame just before (motion vectors: scene_hook_run).
+static void mv_capture_camera(const float *p, uint64_t fr) {
+    if (ao.vp_frame == fr || ao.poff < 64) return;
+    const float *v = p - 16;
+    bool rigid = v[12] == 0 && v[13] == 0 && v[14] == 0 && v[15] == 1;
+    for (int r = 0; r < 3 && rigid; r++) {
+        double l = (double)v[r * 4] * v[r * 4] + (double)v[r * 4 + 1] * v[r * 4 + 1] + (double)v[r * 4 + 2] * v[r * 4 + 2];
+        rigid = fabs(l - 1) < 1e-3;
+    }
+    static bool warned;
+    if (!rigid) {
+        if (!warned) { warned = true; LOG("[mv] no rigid view matrix before the projection: no motion vectors\n"); }
+        ao.prev_ok = false;
+        return;
+    }
+    double vp[16];
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) {
+            double s = 0;
+            for (int k = 0; k < 4; k++) s += (double)p[r * 4 + k] * v[k * 4 + c];
+            vp[r * 4 + c] = s;
+        }
+    ao.prev_ok = ao.vp_frame && ao.vp_frame + 1 == fr;
+    memcpy(ao.vp_prev, ao.vp, sizeof vp);
+    memcpy(ao.vp, vp, sizeof vp);
+    ao.vp_frame = fr;
+}
+
 // The scene's projection, from the vertex constant buffers of its draws: where it was last found, else a scan (once
 // per frame). Let's Go: row-major, near 32, far 10000 (cm).
 static void ssao_find_projection(void) {
@@ -2442,6 +2490,7 @@ static void ssao_find_projection(void) {
         Range u = st.ubuf[0][ao.pbind];
         if (u.addr && ao.poff + 64 <= u.size && ssao_proj_at((const float *)(uintptr_t)(u.addr + ao.poff), ao.proj)) {
             ao.proj_frame = fr;
+            mv_capture_camera((const float *)(uintptr_t)(u.addr + ao.poff), fr);
             return;
         }
     }
@@ -2456,6 +2505,7 @@ static void ssao_find_projection(void) {
                 if (ao.pbind != b || ao.poff != o) LOG("[ssao] projection in vertex cbuf %d at %u: near %.3g far %.3g\n", b, o,
                                                       ao.proj[3] / (ao.proj[2] - 1), ao.proj[3] / (ao.proj[2] + 1));
                 ao.pbind = b, ao.poff = o, ao.proj_frame = fr;
+                mv_capture_camera((const float *)(uintptr_t)(u.addr + o), fr);
                 return;
             }
     }
@@ -3288,17 +3338,18 @@ static VkImageView raw_view(TexBackend *b) {
 static VkPipelineLayout post_layout;
 static VkDescriptorSetLayout post_set_layout;
 
-// fmt: the output's format; blend 1: the output multiplies what is there (SSAO onto the game's scene, colour only)
+// fmt: the output's format; blend 1: the output multiplies what is there (SSAO onto the game's scene, colour only),
+// 2: replaces the colour, 3: is added to it (GI)
 static VkPipeline post_pipeline_ex(const char *fs, VkFormat fmt, int blend) {
     static struct { const char *fs; VkFormat fmt; int blend; VkPipeline p; } cache[16];
     for (int i = 0; i < 16; i++) if (cache[i].p && cache[i].fs == fs && cache[i].fmt == fmt && cache[i].blend == blend) return cache[i].p;
     if (!post_layout) {
-        VkDescriptorSetLayoutBinding b[3];
-        for (uint32_t i = 0; i < 3; i++)
+        VkDescriptorSetLayoutBinding b[4];
+        for (uint32_t i = 0; i < 4; i++)
             b[i] = (VkDescriptorSetLayoutBinding){i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
-        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = b};
+        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = b};
         VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &post_set_layout));
-        VkPushConstantRange r = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32};
+        VkPushConstantRange r = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128};  // (32 for most; a matrix: the motion vectors)
         VkPipelineLayoutCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
                                          .pSetLayouts = &post_set_layout, .pushConstantRangeCount = 1, .pPushConstantRanges = &r};
         VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &ci, NULL, &post_layout));
@@ -3323,6 +3374,11 @@ static VkPipeline post_pipeline_ex(const char *fs, VkFormat fmt, int blend) {
                                                     .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO, .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
                                                     .alphaBlendOp = VK_BLEND_OP_ADD, .colorWriteMask = 0x7};
     if (blend == 2) cba.colorWriteMask = 0x7;  // (replace the colour, keep alpha)
+    if (blend == 3)  // (added to the colour: the indirect light)
+        cba = (VkPipelineColorBlendAttachmentState){.blendEnable = VK_TRUE, .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+                                                    .dstColorBlendFactor = VK_BLEND_FACTOR_ONE, .colorBlendOp = VK_BLEND_OP_ADD,
+                                                    .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO, .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                                                    .alphaBlendOp = VK_BLEND_OP_ADD, .colorWriteMask = 0x7};
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1,
                                               .pAttachments = &cba};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
@@ -3342,11 +3398,13 @@ static VkPipeline post_pipeline_ex(const char *fs, VkFormat fmt, int blend) {
 static VkPipeline post_pipeline(const char *fs) { return post_pipeline_ex(fs, VK_FORMAT_R8G8B8A8_UNORM, 0); }
 
 // Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
-// 3, 4: FSR EASU / RCAS, 5: colour adjustment, 6, 7: SSAO (occlusion, blur).
-static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
-    static TexBackend img[8];
+// 3, 4: FSR EASU / RCAS, 5: colour adjustment, 6, 7: SSAO (occlusion, blur), 8: motion vectors (RGBA16F),
+// 9: their RGBA8 encoding (LARECOMP_MV_DUMP), 10, 11: SSAO history (RG16F, ping-pong), 12, 13: the debug views,
+// 14-19: GI (normals, work, history, debug: gi_run).
+static TexBackend *post_image_fmt(int i, uint32_t w, uint32_t h, VkFormat fmt) {
+    static TexBackend img[20];
     TexBackend *d = &img[i];
-    if (d->image && (d->width != w || d->height != h)) {
+    if (d->image && (d->width != w || d->height != h || d->format != fmt)) {
         vk_views_forget(d);
         vk_defer_image(d->image, d->mem);
         d->image = VK_NULL_HANDLE;
@@ -3354,17 +3412,18 @@ static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
     }
     if (!d->image) {
         VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
-                                .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1,
+                                .format = fmt, .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1,
                                 .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
                                 .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
         VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &d->image, &d->mem, NULL));
-        d->format = VK_FORMAT_R8G8B8A8_UNORM; d->width = w; d->height = h; d->depth = 1; d->layers = 1; d->levels = 1;
+        d->format = fmt; d->width = w; d->height = h; d->depth = 1; d->layers = 1; d->levels = 1;
         d->samples = 1; d->aspect = VK_IMAGE_ASPECT_COLOR_BIT; d->base_type = VK_IMAGE_VIEW_TYPE_2D;
         vk_image_init_layout(vk_cmd(), d->image, d->aspect);
     }
     return d;
 }
+static TexBackend *post_image(int i, uint32_t w, uint32_t h) { return post_image_fmt(i, w, h, VK_FORMAT_R8G8B8A8_UNORM); }
 
 static VkImageView post_view(TexBackend *d) {
     static const VkComponentMapping id = {0};
@@ -3400,7 +3459,7 @@ static VkImageView smaa_lut(int i) {
 // clear: start from zero (SMAA's edge pass only writes edge pixels; its weights / output read them).
 // (any view: pipe made for its format by post_pipeline_ex; load: keep what is there - blending onto it)
 static void post_pass_view(VkCommandBuffer cb, VkPipeline pipe, const VkImageView *srcs, int n, VkImageView dv, uint32_t dw,
-                           uint32_t dh, const float pc[8], bool clear, bool load) {
+                           uint32_t dh, const float *pc, uint32_t pcn, bool clear, bool load) {
     vk_full_barrier(cb);
     VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = dv,
                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
@@ -3410,8 +3469,8 @@ static void post_pass_view(VkCommandBuffer cb, VkPipeline pipe, const VkImageVie
                           .layerCount = 1, .colorAttachmentCount = 1, .pColorAttachments = &ca};
     vkCmdBeginRendering(cb, &ri);
     VkDescriptorSet ds = vk_alloc_set(post_set_layout);
-    VkDescriptorImageInfo ii[3];
-    VkWriteDescriptorSet w[3];
+    VkDescriptorImageInfo ii[4];
+    VkWriteDescriptorSet w[4];
     for (int i = 0; i < n; i++) {
         ii[i] = (VkDescriptorImageInfo){vk_default_sampler(true), srcs[i], VK_IMAGE_LAYOUT_GENERAL};
         w[i] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = (uint32_t)i,
@@ -3425,7 +3484,7 @@ static void post_pass_view(VkCommandBuffer cb, VkPipeline pipe, const VkImageVie
     VkRect2D sc = {{0, 0}, {dw, dh}};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
-    vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
+    vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, pcn, pc);
     vkCmdDraw(cb, 3, 1, 0, 0);
     vkCmdEndRendering(cb);
 }
@@ -3433,11 +3492,149 @@ static void post_pass_view(VkCommandBuffer cb, VkPipeline pipe, const VkImageVie
 static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *srcs, int n, TexBackend *dst, const float pc[8],
                       bool clear) {
     VkPipeline pipe = post_pipeline(fs);  // (before the rendering begins: created inside it, the NVIDIA driver crashed)
-    post_pass_view(cb, pipe, srcs, n, post_view(dst), dst->width, dst->height, pc, clear, false);
+    post_pass_view(cb, pipe, srcs, n, post_view(dst), dst->width, dst->height, pc, 32, clear, false);
 }
 
-// The occlusion onto the scene target (outside any pass: vk_end_pass, ssao_draw_hook): occlusion from the depth at its
-// size -> blur across -> blur down -> multiplied onto the scene's colour (the debug view: replaces it).
+// 4x4 inverse (row-major, Gauss-Jordan with partial pivoting). False: singular.
+static bool mat4_inverse(const double *m, double *out) {
+    double a[4][8];
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 8; c++) a[r][c] = c < 4 ? m[r * 4 + c] : (c - 4 == r);
+    for (int c = 0; c < 4; c++) {
+        int p = c;
+        for (int r = c + 1; r < 4; r++) if (fabs(a[r][c]) > fabs(a[p][c])) p = r;
+        if (fabs(a[p][c]) < 1e-12) return false;
+        if (p != c) for (int k = 0; k < 8; k++) { double t = a[c][k]; a[c][k] = a[p][k]; a[p][k] = t; }
+        double inv = 1 / a[c][c];
+        for (int k = 0; k < 8; k++) a[c][k] *= inv;
+        for (int r = 0; r < 4; r++) {
+            if (r == c || a[r][c] == 0) continue;
+            double f = a[r][c];
+            for (int k = 0; k < 8; k++) a[r][k] -= f * a[c][k];
+        }
+    }
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) out[r * 4 + c] = a[r][c + 4];
+    return true;
+}
+
+// Camera motion vectors of this frame (post image 8, RG16F at the depth's size; velocity = this uv - the previous
+// frame's): the previous view-projection x the inverse of this one, in double, applied per pixel to its depth.
+// No previous frame (a scene's first, a skipped frame): the identity (no motion).
+// LARECOMP_MV_YSIGN=-1: NDC y up at row 0 instead (validation). Returns the vectors' image, NULL if none.
+static TexBackend *mv_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, float mo, uint64_t fr) {
+    double m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, inv[16];
+    bool moved = ao.vp_frame == fr && ao.prev_ok && mat4_inverse(ao.vp, inv);
+    if (moved)
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++) {
+                double s = 0;
+                for (int k = 0; k < 4; k++) s += ao.vp_prev[r * 4 + k] * inv[k * 4 + c];
+                m[r * 4 + c] = s;
+            }
+    static float ysign;
+    if (!ysign) ysign = getenv("LARECOMP_MV_YSIGN") ? (float)atof(getenv("LARECOMP_MV_YSIGN")) : 1;
+    float pc[20];
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) pc[c * 4 + r] = (float)m[r * 4 + c];  // (GLSL mat4: columns)
+    pc[16] = mo, pc[17] = ysign, pc[18] = 0, pc[19] = 0;
+    VkPipeline p = post_pipeline_ex("mv.frag", VK_FORMAT_R16G16B16A16_SFLOAT, 0);
+    TexBackend *mv = post_image_fmt(8, w, h, VK_FORMAT_R16G16B16A16_SFLOAT);
+    post_pass_view(cb, p, &dv, 1, post_view(mv), w, h, pc, sizeof pc, false, false);
+    // LARECOMP_MV_DUMP=<frame>,...: the vectors encoded in RGBA8 (0.5 + 32 x velocity) -> build/frames/mv_<frame>.png
+    static const char *dump = (const char *)1;
+    if (dump == (const char *)1) dump = getenv("LARECOMP_MV_DUMP");
+    for (const char *q = dump; q && *q;) {
+        long at = strtol(q, (char **)&q, 10);
+        if (at == (long)fr) {
+            TexBackend *enc = post_image(9, w, h);
+            float pe[8] = {0, 0, 0, 0, 1.0f / (float)w, 1.0f / (float)h, 32, 0};
+            VkImageView src[3] = {post_view(mv)};
+            post_pass_view(cb, post_pipeline("mv_show.frag"), src, 1, post_view(enc), w, h, pe, 32, false, false);
+            vk_full_barrier(cb);
+            char path[96];
+            snprintf(path, sizeof path, "build/frames/mv_%05ld.png", at);
+            renderer_save_texture_tex(enc, path);
+            LOG("[mv] frame %ld: %s, previous frame %s\n", at, path, moved ? "matched" : "missing (no motion)");
+        }
+        if (*q == ',') q++; else break;
+    }
+    return mv;
+}
+
+// Screen-space indirect light (F12 GI; shaders.c gi_*), in the scene hook before the occlusion: normals from the depth
+// (post image 14) -> trace at 1 / gi_div of each axis (15) -> blur across (16) -> blur down (15) -> temporal (history
+// 17 / 18, along the camera motion vectors) -> added onto the scene, edge-aware (the debug view: 19, at the present).
+static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, float mo, TexBackend *mv, uint64_t fr) {
+    uint32_t div = (uint32_t)g_settings.gi_div, lw = (w + div - 1) / div, lh = (h + div - 1) / div;
+    // (pipelines and images before any rendering begins)
+    VkPipeline p_n = post_pipeline("gi_normal.frag");
+    VkPipeline p_t = post_pipeline_ex("gi_trace.frag", VK_FORMAT_R16G16B16A16_SFLOAT, 0);
+    VkPipeline p_b = post_pipeline_ex("gi_blur.frag", VK_FORMAT_R16G16B16A16_SFLOAT, 0);
+    VkPipeline p_tm = post_pipeline_ex("gi_temporal.frag", VK_FORMAT_R16G16B16A16_SFLOAT, 0);
+    VkPipeline p_c = post_pipeline_ex("gi_composite.frag", ao.cfmt, 3);
+    VkPipeline p_dbg = post_pipeline("gi_composite.frag");
+    TexBackend *nrm = post_image(14, w, h);
+    TexBackend *g0 = post_image_fmt(15, lw, lh, VK_FORMAT_R16G16B16A16_SFLOAT), *g1 = post_image_fmt(16, lw, lh, VK_FORMAT_R16G16B16A16_SFLOAT);
+    bool temporal = g_settings.gi_temporal && mv;
+    float turn = temporal ? (float)fmod((double)fr * 0.6180339887, 1.0) : 0.0f;
+    float pc[16] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3],
+                    0, 0, 0, 0,
+                    0, 0, 0, 0,
+                    mo, 0.75f, (float)lw, (float)lh};
+    post_pass_view(cb, p_n, &dv, 1, post_view(nrm), w, h, pc, sizeof pc, false, false);
+    // trace: b = radius, thickness, origin bias, max receiver distance (60 m); c = rays, steps, turn, luminance clamp
+    pc[4] = g_settings.gi_radius, pc[5] = g_settings.gi_thickness, pc[6] = 3, pc[7] = 6000;
+    pc[8] = (float)g_settings.gi_rays, pc[9] = (float)g_settings.gi_steps, pc[10] = turn, pc[11] = GI_LUMA_CLAMP;
+    VkImageView ti[4] = {dv, post_view(nrm), ao.cview};
+    post_pass_view(cb, p_t, ti, 3, post_view(g0), lw, lh, pc, sizeof pc, false, false);
+    float pb[16] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 1, 0, 1, 0, 0, 0, 0, 0, mo, 0, (float)lw, (float)lh};
+    VkImageView bx[4] = {post_view(g0), post_view(nrm)};
+    post_pass_view(cb, p_b, bx, 2, post_view(g1), lw, lh, pb, sizeof pb, false, false);
+    pb[4] = 0, pb[5] = 1;
+    VkImageView by[4] = {post_view(g1), post_view(nrm)};
+    post_pass_view(cb, p_b, by, 2, post_view(g0), lw, lh, pb, sizeof pb, false, false);
+    TexBackend *res = g0;
+    if (temporal) {  // (no history after a gap, a cut or a change of size)
+        static uint64_t hist_frame;
+        static uint32_t hist_w, hist_h;
+        TexBackend *hp = post_image_fmt(17 + (int)((fr + 1) & 1), lw, lh, VK_FORMAT_R16G16B16A16_SFLOAT);
+        TexBackend *hc = post_image_fmt(17 + (int)(fr & 1), lw, lh, VK_FORMAT_R16G16B16A16_SFLOAT);
+        bool have = hist_frame + 1 == fr && ao.prev_ok && hist_w == lw && hist_h == lh;
+        float pt[16] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 0, 0.85f, 0, have ? 0.0f : 1.0f,
+                        0, 0, 0, 0, mo, 0, (float)lw, (float)lh};
+        VkImageView tt[4] = {post_view(g0), post_view(mv), post_view(hp)};
+        post_pass_view(cb, p_tm, tt, 3, post_view(hc), lw, lh, pt, sizeof pt, false, false);
+        hist_frame = fr, hist_w = lw, hist_h = lh;
+        res = hc;
+    }
+    // composite: b.x = intensity x diffuse reflectance (0.5); c.xy = 1 / the output's size
+    float strength = g_settings.gi_intensity * 0.5f;
+    float pcm[16] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], strength, 0, 0, 0,
+                     1.0f / (float)ao.cw, 1.0f / (float)ao.ch, 0, 0, mo, 0, (float)lw, (float)lh};
+    VkImageView ci[4] = {post_view(res), dv, post_view(nrm)};
+    if (g_settings.gi_debug) {  // the light alone (x GI_DEBUG_EXPOSURE, tone mapped), shown at the present
+        TexBackend *enc = post_image(19, w, h);
+        float pd[16];
+        memcpy(pd, pcm, sizeof pd);
+        static float expo = -1;  // (LARECOMP_GI_DEBUG_EXPOSURE: another exposure for the view)
+        if (expo < 0) expo = getenv("LARECOMP_GI_DEBUG_EXPOSURE") ? (float)atof(getenv("LARECOMP_GI_DEBUG_EXPOSURE")) : GI_DEBUG_EXPOSURE;
+        pd[5] = 1, pd[6] = expo, pd[8] = 1.0f / (float)w, pd[9] = 1.0f / (float)h;
+        post_pass_view(cb, p_dbg, ci, 3, post_view(enc), w, h, pd, sizeof pd, false, false);
+        debug_view = enc, debug_view_frame = fr;
+    }
+    post_pass_view(cb, p_c, ci, 3, ao.cview, ao.cw, ao.ch, pcm, sizeof pcm, false, true);
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        LOG("[gi] scene %ux%u, GI %ux%u (1/%u), %d rays x %d steps, radius %.0f\n", ao.cw, ao.ch, lw, lh, div, g_settings.gi_rays,
+            g_settings.gi_steps, g_settings.gi_radius);
+    }
+}
+
+// The scene hook (outside any pass: vk_end_pass, ssao_draw_hook), once per frame between the scene's opaque and blended
+// draws: camera motion vectors, then the occlusion - from the depth at its size -> blur across -> blur down ->
+// multiplied onto the scene's colour. The debug views replace the colour (the motion vectors' last).
 static void ssao_run(void) {
     uint64_t fr = renderer_present_count();
     ao.done_frame = fr;
@@ -3448,36 +3645,92 @@ static void ssao_run(void) {
     static const VkComponentMapping id = {0};
     VkImageView dv = vk_image_view(d, VK_IMAGE_VIEW_TYPE_2D, d->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
     uint32_t w = d->width, h = d->height;
-    // (pipelines and images before any rendering begins)
-    VkPipeline p_ao = post_pipeline("ssao.frag"), p_blur = post_pipeline("ssao_blur.frag");
-    VkPipeline p_apply = post_pipeline_ex("ssao_apply.frag", ao.cfmt, g_settings.ssao_debug ? 2 : 1);
-    TexBackend *a0 = post_image(6, w, h), *a1 = post_image(7, w, h);
     float mo = nvn_depth_mode() == 0 ? 1.0f : 0.0f;
-    float pc[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], g_settings.ssao_radius, g_settings.ssao_intensity, mo,
-                   0.08f * (float)h};
-    post_pass_view(cb, p_ao, &dv, 1, post_view(a0), w, h, pc, false, false);
-    float pb[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 1, 0, mo, 0};
-    VkImageView bx[3] = {post_view(a0), dv};
-    post_pass_view(cb, p_blur, bx, 2, post_view(a1), w, h, pb, false, false);
-    pb[4] = 0, pb[5] = 1;
-    VkImageView by[3] = {post_view(a1), dv};
-    post_pass_view(cb, p_blur, by, 2, post_view(a0), w, h, pb, false, false);
-    float pa[8] = {0, 0, 0, 0, 1.0f / (float)ao.cw, 1.0f / (float)ao.ch};
-    VkImageView ai[3] = {post_view(a0)};
-    post_pass_view(cb, p_apply, ai, 1, ao.cview, ao.cw, ao.ch, pa, false, true);
+    TexBackend *mv = mv_wanted() ? mv_run(cb, dv, w, h, mo, fr) : NULL;
+    cb = vk_cmd();  // (a dump submits the command buffer: renderer_save_texture_tex)
+    if (g_settings.gi && g_settings.gi_intensity > 0) gi_run(cb, dv, w, h, mo, mv, fr);
+    if (g_settings.ssao) {
+        // (pipelines and images before any rendering begins)
+        VkPipeline p_ao = post_pipeline("ssao.frag"), p_blur = post_pipeline("ssao_blur.frag");
+        VkPipeline p_apply = post_pipeline_ex("ssao_apply.frag", ao.cfmt, 1);
+        TexBackend *a0 = post_image(6, w, h), *a1 = post_image(7, w, h);
+        // temporal: the sample spiral turns every frame (golden ratio steps), the history follows the camera
+        bool temporal = g_settings.ssao_temporal && mv;
+        float turn = temporal ? (float)fmod((double)fr * 0.6180339887, 1.0) : 0.0f;
+        float pc[12] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], g_settings.ssao_radius, g_settings.ssao_intensity, mo,
+                        0.08f * (float)h, turn};
+        post_pass_view(cb, p_ao, &dv, 1, post_view(a0), w, h, pc, sizeof pc, false, false);
+        float pb[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 1, 0, mo, 0};
+        VkImageView bx[4] = {post_view(a0), dv};
+        post_pass_view(cb, p_blur, bx, 2, post_view(a1), w, h, pb, 32, false, false);
+        pb[4] = 0, pb[5] = 1;
+        VkImageView by[4] = {post_view(a1), dv};
+        post_pass_view(cb, p_blur, by, 2, post_view(a0), w, h, pb, 32, false, false);
+        TexBackend *res = a0;
+        if (temporal) {  // history ping-pong (post images 10 / 11, RG16F: occlusion, distance); none after a gap or a cut
+            static uint64_t hist_frame;
+            static uint32_t hist_w, hist_h;
+            TexBackend *hp = post_image_fmt(10 + (int)((fr + 1) & 1), w, h, VK_FORMAT_R16G16_SFLOAT);
+            TexBackend *hc = post_image_fmt(10 + (int)(fr & 1), w, h, VK_FORMAT_R16G16_SFLOAT);
+            bool have = hist_frame + 1 == fr && ao.prev_ok && hist_w == w && hist_h == h;
+            float pt[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 0, 0.9f, mo, have ? 0.0f : 1.0f};
+            VkImageView ti[4] = {post_view(a0), dv, post_view(mv), post_view(hp)};
+            post_pass_view(cb, post_pipeline_ex("ssao_temporal.frag", VK_FORMAT_R16G16_SFLOAT, 0), ti, 4, post_view(hc), w, h,
+                           pt, 32, false, false);
+            hist_frame = fr, hist_w = w, hist_h = h;
+            res = hc;
+        }
+        float pa[8] = {0, 0, 0, 0, 1.0f / (float)ao.cw, 1.0f / (float)ao.ch};
+        VkImageView ai[4] = {post_view(res)};
+        if (g_settings.ssao_debug) {  // (the occlusion alone, grey: shown at the present)
+            TexBackend *enc = post_image(12, w, h);
+            float pe[8] = {0, 0, 0, 0, 1.0f / (float)w, 1.0f / (float)h};
+            post_pass_view(cb, post_pipeline("ssao_apply.frag"), ai, 1, post_view(enc), w, h, pe, 32, false, false);
+            debug_view = enc, debug_view_frame = fr;
+        }
+        // LARECOMP_SSAO_DUMP=<frame>,...: the occlusion as applied (after the blur and the history) -> build/frames/ao_<frame>.png
+        static const char *dump = (const char *)1;
+        if (dump == (const char *)1) dump = getenv("LARECOMP_SSAO_DUMP");
+        for (const char *q = dump; q && *q;) {
+            long at = strtol(q, (char **)&q, 10);
+            if (at == (long)fr) {
+                TexBackend *enc = post_image(9, w, h);
+                float pe[8] = {0, 0, 0, 0, 1.0f / (float)w, 1.0f / (float)h, 0};
+                post_pass_view(cb, post_pipeline("ssao_apply.frag"), ai, 1, post_view(enc), w, h, pe, 32, false, false);
+                vk_full_barrier(cb);
+                char path[96];
+                snprintf(path, sizeof path, "build/frames/ao_%05ld.png", at);
+                renderer_save_texture_tex(enc, path);
+                cb = vk_cmd();  // (submitted by the save)
+            }
+            if (*q == ',') q++; else break;
+        }
+        post_pass_view(cb, p_apply, ai, 1, ao.cview, ao.cw, ao.ch, pa, 32, false, true);
+        static bool logged;
+        if (!logged) {
+            logged = true;
+            LOG("[ssao] scene %ux%u, depth %ux%u (format %d), %u opaque draws before it\n", ao.cw, ao.ch, w, h, (int)d->format, ao.opaque);
+        }
+    }
+    if (mv && g_settings.mv_debug) {  // (x right red, y up green, still: grey; 16 x velocity; shown at the present)
+        TexBackend *enc = post_image(13, w, h);
+        float ps[8] = {0, 0, 0, 0, 1.0f / (float)w, 1.0f / (float)h, 16, 0};
+        VkImageView src[4] = {post_view(mv)};
+        post_pass_view(cb, post_pipeline("mv_show.frag"), src, 1, post_view(enc), w, h, ps, 32, false, false);
+        debug_view = enc, debug_view_frame = fr;
+    }
     vk_full_barrier(cb);
     ao.busy = false;
-    static bool logged;
-    if (!logged) {
-        logged = true;
-        LOG("[ssao] scene %ux%u, depth %ux%u (format %d), %u opaque draws before it\n", ao.cw, ao.ch, w, h, (int)d->format, ao.opaque);
-    }
 }
 
 // The view the present samples: the game image, or its anti-aliased / upscaled version. ow x oh: the whole image's
 // size in the window (its crop is drawn into the viewport).
 static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, double oh_d) {
     VkImageView v = raw_view(b);
+    // a debug view of this frame or the one before (F12), at the game image's size: shown instead of it
+    if ((g_settings.ssao_debug || g_settings.mv_debug || g_settings.gi_debug) && debug_view && debug_view_frame + 2 >= renderer_present_count() &&
+        debug_view->width == b->width && debug_view->height == b->height)
+        v = post_view(debug_view);
     bool smaa = g_settings.antialias == AA_SMAA;
     uint32_t ow = (uint32_t)lround(ow_d), oh = (uint32_t)lround(oh_d);
     if (ow > 16384) ow = 16384;
