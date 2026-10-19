@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 (2026-10-19)
+
+- **Wild battles no longer crash when you switch to your partner** (#6), and the 0.4.1 fix is now exact. The crash
+  happens whenever the partner (the Pikachu or Eevee you started with) enters the battle while it is the one walking
+  with you (early in the game nobody else does): the battle brings in the field model of the Pokémon walking with you,
+  and the battle this mode uses has none for it. In that case touching a wild Pokémon now starts the game's own
+  catch, as without the mode. With another Pokémon walking with you, wild battles work, the partner included -
+  0.4.1 had sent some of those to the catch too.
+
 ## 0.4.1 (2026-10-19)
 
 - **Wild battles no longer crash early in the game** (#6): with the partner in the first party slot no Pokémon walks
