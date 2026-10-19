@@ -3,8 +3,10 @@
 //      by its SHA-256, unpacked with Windows' tar into cache/waifu2x/ (elsewhere: put it there by hand);
 //   2. extracted/romfs.bin: every SARC archive's BNTX textures (tools/ui_texkeys.py does the same in Python), one per
 //      content key, decoded (bcdec: BC1-BC5, BC7; RGB5A1, RGBA8, R8, RG8) to PNG in cache/ui2x_work/in (transparent
-//      texels take their neighbours' colour first: no dark fringes once filtered);
-//   3. waifu2x (CUnet, 2x, light denoising: the BC blocks) into cache/ui2x_work/out;
+//      texels take their neighbours' colour first: no dark fringes once filtered); an image with transparency as two
+//      RGB images, its colour and its alpha as grey (waifu2x 20250915 loses the alpha of an RGBA image outside its
+//      last tiles: 25/32 of a 512 x 288 one came out transparent);
+//   3. waifu2x (CUnet, 2x, light denoising: the BC blocks) into cache/ui2x_work/out, the alpha as an image of its own;
 //   4. each compressed again (stb_dxt: BC1 when opaque, BC3, BC4 / BC5 for one / two channels) into cache/ui2x.pak:
 //      "UI2X", version, count, then per texture {key, original size, format, size, offset, bytes}, then the blocks.
 // The key: CRC-32 and Adler-32 of level 0's block rows untiled - the same bytes in the BNTX file and, untiled again,
@@ -241,7 +243,7 @@ static bool fetch_tool(void) {
 }
 
 // ================================================================== step 2: the textures, from the game files
-typedef struct { uint64_t key; uint32_t w, h; uint8_t ch; } Item;  // ch: 1 (BC4, R8), 2 (BC5, RG8), 4 (colour + alpha)
+typedef struct { uint64_t key; uint32_t w, h; uint8_t ch; bool alpha; } Item;  // ch: 1 (BC4, R8), 2 (BC5, RG8), 4 (colour [+ alpha])
 static Item *g_items;
 static uint32_t g_nitems, g_cap_items;
 
@@ -295,14 +297,16 @@ static void bleed(uint8_t *px, uint32_t w, uint32_t h) {
     free(known), free(next);
 }
 
-// One BNTX texture -> PNG (true: written)
-static bool texture_to_png(const uint8_t *b, uint64_t bsize, uint64_t o, uint32_t *nskip) {
+// One BNTX texture decoded: RGBA8 padded to whole blocks (pw x ph), its key, size and channels. NULL: a format
+// left out (*nskip counted) or broken.
+typedef struct { uint64_t key; uint32_t w, h, pw, ph, ch; } Decoded;
+static uint8_t *decode_texture(const uint8_t *b, uint64_t bsize, uint64_t o, Decoded *dd, uint32_t *nskip) {
 #define RD(T, off) (*(const T *)(b + (off)))
-    if (o + 0x78 > bsize) return false;
+    if (o + 0x78 > bsize) return NULL;
     uint32_t fmt = RD(uint32_t, o + 0x1C), type = fmt >> 8;
     int32_t w = RD(int32_t, o + 0x24), h = RD(int32_t, o + 0x28), layout = RD(int32_t, o + 0x34);
     uint64_t ptrs = RD(uint64_t, o + 0x70);
-    if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || ptrs + 8 > bsize) return false;
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || ptrs + 8 > bsize) return NULL;
     uint64_t data0 = RD(uint64_t, ptrs);
 #undef RD
     uint32_t bpb, bs, ch;  // bytes per block, block size (1 or 4), channels
@@ -314,21 +318,18 @@ static bool texture_to_png(const uint8_t *b, uint64_t bsize, uint64_t o, uint32_
     case 0x0b: bpb = 4, bs = 1, ch = 4; break;
     case 0x02: bpb = 1, bs = 1, ch = 1; break;
     case 0x09: bpb = 2, bs = 1, ch = 2; break;
-    default: (*nskip)++; return false;  // (ASTC, BC6: none in the interface that matters)
+    default: (*nskip)++; return NULL;  // (ASTC, BC6: none in the interface that matters)
     }
     uint32_t wb = ((uint32_t)w + bs - 1) / bs, hb = ((uint32_t)h + bs - 1) / bs;
     uint64_t lin_size = (uint64_t)wb * hb * bpb;
-    if (data0 >= bsize) return false;
+    if (data0 >= bsize) return NULL;
     uint8_t *lin = malloc(lin_size);
-    if (!lin) return false;
+    if (!lin) return NULL;
     untile(b + data0, bsize - data0, lin, wb, hb, bpb, (uint32_t)layout & 7);
-    uint64_t key = ui2x_key(lin, lin_size);
-    for (uint32_t i = 0; i < g_nitems; i++)  // (one per content: the language variants are mostly the same images)
-        if (g_items[i].key == key && g_items[i].w == (uint32_t)w && g_items[i].h == (uint32_t)h) { free(lin); return false; }
-    // decode to RGBA8 (padded to whole blocks)
     uint32_t pw = wb * bs, ph = hb * bs;
+    *dd = (Decoded){ui2x_key(lin, lin_size), (uint32_t)w, (uint32_t)h, pw, ph, ch};
     uint8_t *px = calloc((size_t)pw * ph, 4);
-    if (!px) { free(lin); return false; }
+    if (!px) { free(lin); return NULL; }
     for (uint32_t by = 0; by < hb; by++)
         for (uint32_t bx = 0; bx < wb; bx++) {
             const uint8_t *blk = lin + ((uint64_t)by * wb + bx) * bpb;
@@ -359,23 +360,42 @@ static bool texture_to_png(const uint8_t *b, uint64_t bsize, uint64_t o, uint32_
             }
         }
     free(lin);
-    if (ch == 4) bleed(px, pw, ph);
+    return px;
+}
+
+// One BNTX texture -> PNG for waifu2x (true: written)
+static bool texture_to_png(const uint8_t *b, uint64_t bsize, uint64_t o, uint32_t *nskip) {
+    Decoded d;
+    uint8_t *px = decode_texture(b, bsize, o, &d, nskip);
+    if (!px) return false;
+    for (uint32_t i = 0; i < g_nitems; i++)  // (one per content: the language variants are mostly the same images)
+        if (g_items[i].key == d.key && g_items[i].w == d.w && g_items[i].h == d.h) { free(px); return false; }
+    bool alpha = false;
+    if (d.ch == 4)
+        for (uint32_t y = 0; y < d.h && !alpha; y++)
+            for (uint32_t x = 0; x < d.w && !alpha; x++) alpha = px[((size_t)y * d.pw + x) * 4 + 3] != 255;
     char path[256];
-    snprintf(path, sizeof path, WORK "/in/%016llx.png", (unsigned long long)key);
-    bool ok;
-    if (ch == 4) {
-        ok = stbi_write_png(path, w, h, 4, px, (int)pw * 4) != 0;
-    } else {  // (no alpha: RGB, the channels in R / G)
-        for (size_t i = 0; i < (size_t)pw * ph; i++) px[i * 3] = px[i * 4], px[i * 3 + 1] = px[i * 4 + 1], px[i * 3 + 2] = px[i * 4 + 2];
-        ok = stbi_write_png(path, w, h, 3, px, (int)pw * 3) != 0;
+    bool ok = true;
+    if (alpha) {  // the alpha as a grey image of its own (waifu2x mishandles RGBA: see above)
+        uint8_t *a = malloc((size_t)d.pw * d.ph * 3);
+        if (!a) { free(px); return false; }
+        for (size_t i = 0; i < (size_t)d.pw * d.ph; i++) a[i * 3] = a[i * 3 + 1] = a[i * 3 + 2] = px[i * 4 + 3];
+        snprintf(path, sizeof path, WORK "/in/%016llx_a.png", (unsigned long long)d.key);
+        ok = stbi_write_png(path, (int)d.w, (int)d.h, 3, a, (int)d.pw * 3) != 0;
+        free(a);
+        bleed(px, d.pw, d.ph);
     }
+    // the colour (or the channels in R / G) as RGB
+    for (size_t i = 0; i < (size_t)d.pw * d.ph; i++) px[i * 3] = px[i * 4], px[i * 3 + 1] = px[i * 4 + 1], px[i * 3 + 2] = px[i * 4 + 2];
+    snprintf(path, sizeof path, WORK "/in/%016llx.png", (unsigned long long)d.key);
+    ok = ok && stbi_write_png(path, (int)d.w, (int)d.h, 3, px, (int)d.pw * 3) != 0;
     free(px);
     if (!ok) return false;
     if (g_nitems == g_cap_items) {
         g_cap_items = g_cap_items ? g_cap_items * 2 : 1024;
         g_items = realloc(g_items, g_cap_items * sizeof *g_items);
     }
-    g_items[g_nitems++] = (Item){key, (uint32_t)w, (uint32_t)h, (uint8_t)ch};
+    g_items[g_nitems++] = (Item){d.key, d.w, d.h, (uint8_t)d.ch, alpha};
     return true;
 }
 
@@ -474,8 +494,14 @@ static bool pack(void) {
         if (!px) continue;
         if ((uint32_t)w != it->w * 2 || (uint32_t)h != it->h * 2) { stbi_image_free(px); continue; }
         bool opaque = true;
-        if (it->ch == 4)
-            for (size_t k = 0; k < (size_t)w * h && opaque; k++) opaque = px[k * 4 + 3] == 255;
+        if (it->alpha) {  // (its alpha, upscaled as an image of its own)
+            snprintf(path, sizeof path, WORK "/out/%016llx_a.png", (unsigned long long)it->key);
+            int aw, ah, ac;
+            uint8_t *a = stbi_load(path, &aw, &ah, &ac, 1);
+            if (!a || aw != w || ah != h) { stbi_image_free(a); stbi_image_free(px); continue; }
+            for (size_t k = 0; k < (size_t)w * h; k++) px[k * 4 + 3] = a[k], opaque &= a[k] == 255;
+            stbi_image_free(a);
+        }
         int fmt = it->ch == 1 ? UI2X_BC4 : it->ch == 2 ? UI2X_BC5 : opaque ? UI2X_BC1 : UI2X_BC3;
         uint32_t bpb = fmt == UI2X_BC1 || fmt == UI2X_BC4 ? 8 : 16, wb = ((uint32_t)w + 3) / 4, hb = ((uint32_t)h + 3) / 4;
         uint64_t size = (uint64_t)wb * hb * bpb;
@@ -553,16 +579,17 @@ static void *generate_thread(void *unused) {
     g_state = UI2X_UPSCALING, g_progress = 0;
     {
         const char *argv[] = {exe, "-i", WORK "/in", "-o", WORK "/out", "-n", "1", "-s", "2", "-f", "png", "-m", "models-cunet", NULL};
+        int n_in = count_files(WORK "/in");  // (the images with transparency: two each)
         PlatProc p = plat_spawn(argv, WORK "/waifu2x.log", false);
         int r = -1;
         if (p)
             while ((r = plat_proc_wait(p, false)) == -1) {
-                g_progress = (float)count_files(WORK "/out") / (float)g_nitems;
+                g_progress = (float)count_files(WORK "/out") / (float)(n_in ? n_in : 1);
                 SDL_Delay(200);
             }
         int made = count_files(WORK "/out");
-        LOG("[ui2x] waifu2x: exit %d, %d of %u images, %.1f s\n", r, made, g_nitems, (plat_now_ns() - t0) / 1e9);
-        if (r != 0 || made < (int)g_nitems / 2) {
+        LOG("[ui2x] waifu2x: exit %d, %d of %d images, %.1f s\n", r, made, n_in, (plat_now_ns() - t0) / 1e9);
+        if (r != 0 || made < n_in / 2) {
             FILE *lg = fopen(WORK "/waifu2x.log", "rb");  // (its last lines into ours)
             if (lg) {
                 char buf[2048];

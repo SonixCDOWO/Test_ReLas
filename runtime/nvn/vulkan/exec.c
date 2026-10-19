@@ -1334,6 +1334,81 @@ static void compile_program(void *arg) {
     atomic_store(&p->state, p->vs && p->fs ? 1 : 2);
 }
 
+// ---- the game's blur and depth of field, filtered better (blur_quality, on by default)
+// The background blur of the menus and the depth of field of the cutscenes are one chain of the game's: the HDR scene
+// taken down (1/2, 1/3, 1/6 of its size, one bilinear tap each: shimmers as anything in it moves), blurred there
+// separably (5 and 9 taps), and the levels mixed back into the full-size scene by its blur size (bilinear: blocky,
+// diamond-shaped steps at high resolutions). Those shaders, known by the hash of their code (the same one draw_ logs
+// with LARECOMP_LOG_FSHASH), have their texture reads replaced in their GLSL:
+//   down: the 13-tap filter of "Next generation post processing in Call of Duty" (Jimenez) over the pixel's footprint;
+//   soft: each blur tap four rotated-grid taps half a texel out (the gaps between taps filled, the steps smoothed);
+//   up:   a smaller texture than the output read with a cubic B-spline (four bilinear taps); others as they were.
+// The bloom shares the downsample and one blur shader: it gets the same.
+enum { FX_DOWN = 1, FX_SOFT, FX_UP };
+static const struct { uint64_t hash; int mode; } fx_shaders[] = {
+    {0xc5f8d9e5305c23c5ull, FX_DOWN},  // 1 tap x a scale: every level of the chain (and the bloom's)
+    {0xbefcb4496f4421b8ull, FX_SOFT},  // 5 taps (offsets from the constants)
+    {0xbb3a0401b87bf5ebull, FX_SOFT},  // 9 taps (the same)
+    {0x1051fb0a1c062d98ull, FX_SOFT},  // 5 taps (offsets in the varyings; the bloom's too)
+    {0x3779b28fd4ab87f7ull, FX_SOFT},  // 9 taps (the same)
+    {0x616b00767ad5ed0bull, FX_UP},    // a level added onto the next larger one
+    {0x8f037ec93d4ec782ull, FX_UP},    // the composite: six blurred levels and the scene
+};
+static const char fx_glsl[] =
+    "vec2 fx_px(vec2 uv, vec2 ts) { return max(abs(dFdx(uv)), abs(dFdy(uv))) * ts; }  // source texels per output pixel\n"
+    "vec4 fx_down(sampler2D t, vec2 uv) {\n"
+    "  vec2 ts = vec2(textureSize(t, 0)), k = max(fx_px(uv, ts) * 0.5, vec2(0.5)) / ts;\n"
+    "  vec4 a = texture(t, uv + k * vec2(-2, -2)), b = texture(t, uv + k * vec2(0, -2)), c = texture(t, uv + k * vec2(2, -2));\n"
+    "  vec4 d = texture(t, uv + k * vec2(-1, -1)), e = texture(t, uv + k * vec2(1, -1));\n"
+    "  vec4 f = texture(t, uv + k * vec2(-2, 0)), g = texture(t, uv), h = texture(t, uv + k * vec2(2, 0));\n"
+    "  vec4 i = texture(t, uv + k * vec2(-1, 1)), j = texture(t, uv + k * vec2(1, 1));\n"
+    "  vec4 l = texture(t, uv + k * vec2(-2, 2)), m = texture(t, uv + k * vec2(0, 2)), n = texture(t, uv + k * vec2(2, 2));\n"
+    "  return (d + e + i + j) * 0.125 + (a + c + l + n) * 0.03125 + (b + f + h + m) * 0.0625 + g * 0.125;\n"
+    "}\n"
+    "vec4 fx_soft(sampler2D t, vec2 uv) {\n"
+    "  vec2 o = 0.5 / vec2(textureSize(t, 0));\n"
+    "  return 0.25 * (texture(t, uv + o * vec2(-0.5, -1)) + texture(t, uv + o * vec2(1, -0.5)) +\n"
+    "                 texture(t, uv + o * vec2(0.5, 1)) + texture(t, uv + o * vec2(-1, 0.5)));\n"
+    "}\n"
+    "vec4 fx_up(sampler2D t, vec2 uv) {\n"
+    "  vec2 ts = vec2(textureSize(t, 0));\n"
+    "  if (max(fx_px(uv, ts).x, fx_px(uv, ts).y) > 0.75) return texture(t, uv);  // (not magnified: as the game read it)\n"
+    "  vec2 p = uv * ts - 0.5, f = fract(p), q = floor(p) - 0.5;\n"
+    "  vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0, w1 = (4.0 - 6.0 * f * f + 3.0 * f * f * f) / 6.0;\n"
+    "  vec2 w3 = f * f * f / 6.0, w2 = 1.0 - w0 - w1 - w3;\n"
+    "  vec2 s0 = w0 + w1, s1 = w2 + w3, c0 = (q + w1 / s0) / ts, c1 = (q + 2.0 + w3 / s1) / ts;\n"
+    "  return s0.y * (s0.x * texture(t, vec2(c0.x, c0.y)) + s1.x * texture(t, vec2(c1.x, c0.y))) +\n"
+    "         s1.y * (s0.x * texture(t, vec2(c0.x, c1.y)) + s1.x * texture(t, vec2(c1.x, c1.y)));\n"
+    "}\n";
+
+static void fx_patch_fs(Prog *p) {
+    if (!g_settings.blur_quality || !p->fi || !p->fi->msl || !p->code[1]) return;
+    uint64_t h = 1469598103934665603ull;
+    const uint8_t *b = (const uint8_t *)(uintptr_t)(p->code[1] + 0x30);
+    for (int i = 0; i < 0x200; i++) { h ^= b[i]; h *= 0x100000001B3ull; }  // (draw_'s fragment-shader hash)
+    int mode = 0;
+    for (size_t i = 0; i < sizeof fx_shaders / sizeof *fx_shaders; i++) if (fx_shaders[i].hash == h) mode = fx_shaders[i].mode;
+    const char *src = p->fi->msl, *m = strstr(src, "void main() {");
+    if (!mode || !m) return;
+    const char *fn = mode == FX_DOWN ? "fx_down(t" : mode == FX_SOFT ? "fx_soft(t" : "fx_up(t";
+    size_t n = 0;
+    for (const char *q = m; (q = strstr(q, "texture(t")); q++) n++;
+    size_t len = strlen(src), cap = len + sizeof fx_glsl + n * 8 + 1;
+    char *s = malloc(cap), *o = s;
+    if (!s) return;
+    memcpy(o, src, (size_t)(m - src)), o += m - src;  // (declarations: the helpers come right before main)
+    memcpy(o, fx_glsl, sizeof fx_glsl - 1), o += sizeof fx_glsl - 1;
+    for (const char *q = m; *q;) {
+        if (!strncmp(q, "texture(t", 9)) { memcpy(o, fn, strlen(fn)), o += strlen(fn), q += 9; }
+        else *o++ = *q++;
+    }
+    *o = 0;
+    p->fi->msl = s;  // (the translator's string is kept: it lives as long as the program)
+    static int nlog;
+    if (nlog++ < 16) LOG("[fx] fragment shader %llx (hash %016llx): %d texture reads %s\n", (unsigned long long)p->code[1],
+                         (unsigned long long)h, (int)n, mode == FX_DOWN ? "13-tap downsample" : mode == FX_SOFT ? "rotated-grid" : "B-spline");
+}
+
 static void translate_program(void *arg) {
     Prog *p = arg;
     maxwell_gmem_base = HEAP_BASE;
@@ -1450,6 +1525,7 @@ static void translate_program(void *arg) {
         atomic_store(&p->state, 2);
         return;
     }
+    fx_patch_fs(p);
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
     save_glsl(p->vi->msl, p->code[0], "vs");
     save_glsl(p->fi->msl, p->code[1], "fs");

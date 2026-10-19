@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Fixes many 2x interface images showing wrong** (partly or wholly transparent): waifu2x-ncnn-vulkan 20250915
+  loses the alpha of an RGBA image outside its last tiles (a fully opaque 512x288 image came out 25/32 transparent).
+  Images are now upscaled as RGB only - with transparency, their colour and their alpha (as a grey image) separately,
+  put back together when packed. Opaque images now go into BC1 (the pack: 667 -> 548 MB). Make them again once.
+- **Better background blur and depth of field** (`blur_quality = 1`, on by default): the menus' blurred backdrop and the
+  title screen's depth of field come from one post-processing chain of the game's - the HDR scene taken down to 1/2,
+  1/3 and 1/6 of its size with a single bilinear tap, blurred there with 5- and 9-tap separable kernels, mixed back by
+  each pixel's blur size with bilinear reads (blocky, diamond-shaped steps at 1440p and 4K). Seven of its shaders, known
+  by the hash of their code, now read their textures better: a 13-tap downsample (Jimenez), four rotated-grid taps
+  per blur tap, and a cubic B-spline wherever a smaller level is magnified (the full-size scene is read as before). The
+  game's own weights, focus and blend are untouched. The bloom shares the downsample and one blur shader. Cost at
+  1440p, RTX 5070 Ti: +0.27 ms while a menu or the depth of field is on screen (the composite 0.05 -> 0.22 ms), a few
+  hundredths of a millisecond for the bloom otherwise.
 - **Sharper interface (2x)**, optional: a start-screen button makes the game's menu and interface images again at
   twice their resolution from the player's own game files - nothing of the game ships with the app. Every texture of
   the interface archives (`bin/app/*.arc`, 3081 different images, 316 more in formats left out) is decoded, upscaled by
